@@ -1,0 +1,11 @@
+node_modules/
+.upstream/
+lib/
+artifacts/
+test-results/
+*.draft
+*.draft.tmp-*
+*.log
+.env
+.env.*
+.DS_Store

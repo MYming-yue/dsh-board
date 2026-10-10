@@ -1,0 +1,26 @@
+.dsh-board-center { display:grid !important; grid-template-columns:minmax(0,1fr) 6px minmax(0,var(--dsh-board-chat-width,420px)); grid-template-rows:34px minmax(0,1fr); }
+.dsh-board-mount { display:contents; }
+.dsh-board-center [data-dsh-board-chat] { grid-column:3; grid-row:2; min-width:0; min-height:0; overflow:hidden; position:relative; z-index:1; contain:layout paint; isolation:isolate; }
+.dsh-board-center > [data-dsh-board-decoration] { grid-column:3; grid-row:2; position:absolute !important; z-index:0 !important; overflow:hidden; contain:layout paint; }
+.dsh-board-center [data-dsh-board-collapsed] { display:none !important; }
+.dsh-board-strip { grid-column:1/-1; grid-row:1; position:relative; z-index:2; display:flex; align-items:center; gap:12px; padding:4px 12px; font-size:12px; border-bottom:1px solid color-mix(in srgb,currentColor 15%,transparent); background:Canvas; color:CanvasText; }
+.dsh-board-association { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dsh-board-sync { font-size:11px; opacity:.7; }
+.dsh-board-strip button { padding:4px 9px; background:Canvas; color:CanvasText; border:1px solid color-mix(in srgb,currentColor 20%,transparent); border-radius:5px; cursor:pointer; white-space:nowrap; }
+.dsh-board-frame { grid-column:1; grid-row:2; position:relative; z-index:1; width:100%; height:100%; border:0; min-width:0; background:Canvas; }
+.dsh-board-divider { grid-column:2; grid-row:2; position:relative; z-index:2; cursor:col-resize; touch-action:none; background:color-mix(in srgb,currentColor 12%,transparent); }
+.dsh-board-divider:hover { background:color-mix(in srgb,currentColor 30%,transparent); }
+.dsh-board-divider[hidden] { visibility:hidden; display:block; }
+.dsh-board-resizing .dsh-board-frame { pointer-events:none; }
+.dsh-board-resizing { user-select:none; }
+@media(max-width:900px) { .dsh-board-sync { display:none; } }
+.dsh-board-disabled { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
+.dsh-board-disabled [data-dsh-board-chat] { grid-column:1; grid-row:1; display:flex !important; }
+.dsh-board-disabled > [data-dsh-board-decoration] { grid-column:1; grid-row:1; display:block !important; }
+.dsh-board-disabled .dsh-board-strip, .dsh-board-disabled .dsh-board-frame, .dsh-board-disabled .dsh-board-divider { display:none !important; }
+.dsh-board-settings { padding:24px; max-width:760px; line-height:1.6; color:inherit; }
+.dsh-board-settings h2 { margin:0 0 16px; font-size:20px; }
+.dsh-board-settings label { display:flex; align-items:center; gap:10px; font-weight:600; margin-top:24px; }
+.dsh-board-settings input { width:18px; height:18px; accent-color:#5876e9; }
+.dsh-board-settings p { margin:8px 0 16px; font-size:14px; }
+.dsh-board-settings [role=alert] { color:#c63a3a; }
