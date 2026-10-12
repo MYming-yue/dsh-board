@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { BoardStore } from './store.mjs';
 import { BoardContext, BOARD_INSTRUCTIONS } from './context.mjs';
+import { LayoutTasks, LAYOUT_INSTRUCTIONS } from './layout.mjs';
 
 export const name = 'dsh-board';
 export const inject = ['connection', 'tools', 'systemPrompt'];
@@ -20,6 +21,11 @@ export async function apply(ctx, config = {}) {
   await store.ready;
   const boardContext = new BoardContext(join(store.directory, 'plugin-state.json'));
   await boardContext.ready;
+  const layouts = new LayoutTasks(store);
+  const layoutRestrictions = new Map();
+  const releaseLayout = agent => { layoutRestrictions.get(agent.id)?.(); layoutRestrictions.delete(agent.id); };
+  ctx.effect(() => ctx.tools.guard(exec => layouts.forAgent(exec.agent) && !['draft_board_layout_read','draft_board_layout_apply','run_code'].includes(exec.name)
+    ? '本轮仅允许白板布局读取与坐标提交；内容、结构及其他工具已暂停。' : undefined));
   const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const register = route => ctx.effect(() => ctx.connection.fetch.register(route));
   const options = () => ({ ...boardContext.options, version, draftName: store.bundle.file.board.name, fileName: store.fileName });
@@ -44,8 +50,27 @@ export async function apply(ctx, config = {}) {
       } catch (error) { return json({ error: { message: error.message } }, 400); }
     } });
   ctx.on('agent/inbox/claimed', ({ agent, message }) => {
+    if (message.source?.kind === 'user') {
+      releaseLayout(agent); layouts.settle(agent); layouts.claim(agent, message);
+      if (layouts.forAgent(agent)) layoutRestrictions.set(agent.id, agent.ctx.tools.restrict({ allow: ['draft_board_layout_read','draft_board_layout_apply'] }));
+    }
     if (boardContext.claim(agent.id, message)) void boardContext.save().catch(() => ctx.logger.warn('DSH-board association persistence failed'));
   });
+  ctx.on('agent/status', ({agent,status}) => { if(status === 'idle') { layouts.settle(agent); releaseLayout(agent); } });
+  ctx.effect(() => () => { for(const release of layoutRestrictions.values()) release(); });
+  register({ path: '/api/dsh-board/layout', methods: ['GET','POST','DELETE'], requestBody: 'buffered',
+    fetch: async request => {
+      try {
+        if (!boardContext.options.enabled) throw new Error('DSH-board is disabled');
+        if (request.method === 'POST') return json(await layouts.create(await request.json()));
+        const id = new URL(request.url).searchParams.get('id');
+        if(request.method==='GET' && !id) return json({task:[...layouts.tasks.values()].filter(t=>['pending','running'].includes(t.status)).map(t=>layouts.public(t))[0] ?? null});
+        return json(request.method === 'DELETE' ? layouts.cancel(id) : layouts.public(layouts.get(id)));
+      } catch(error) { return json({error:{message:error.message}},400); }
+    } });
+  register({path:'/api/dsh-board/layout/geometry',methods:['POST'],requestBody:'buffered',fetch:async request=>{
+    try { return json(layouts.observe(await request.json())); } catch(error) { return json({error:{message:error.message}},400); }
+  }});
   register({ path: '/api/dsh-board/state', methods: ['GET'], requestBody: 'buffered',
     fetch: async request => json(await store.snapshot(new URL(request.url).searchParams.get('revision'))) });
   register({ path: '/api/dsh-board/sync', methods: ['POST'], requestBody: 'buffered',
@@ -77,7 +102,11 @@ export async function apply(ctx, config = {}) {
   function reconcile() {
     for (const release of releases) release();
     releases = [];
-    if (!boardContext.options.enabled) return;
+    if (!boardContext.options.enabled) {
+      for(const task of layouts.tasks.values())if(['pending','running'].includes(task.status))layouts.cancel(task.id);
+      layouts.active.clear();for(const release of layoutRestrictions.values())release();layoutRestrictions.clear();
+      return;
+    }
     const requireEnabled = () => { if (!boardContext.options.enabled) throw new Error('DSH-board is disabled'); };
     releases.push(ctx.tools.register({ name: 'draft_board_read',
     description: 'Read the current shared whiteboard before maintaining it. Returns card identities, content, relations and contentVersion. Runtime card associations identify objects, not supplied card contents.',
@@ -88,10 +117,16 @@ export async function apply(ctx, config = {}) {
     description: 'Actively maintain the current shared whiteboard with one validated, undoable Draft Board batch. Read first, then send batchVersion=1.0, boardId, baseContentVersion, actor=agent, label and ops. Identity/version conflicts require reading again.',
     parameters: { type: 'object', properties: { batch: { type: 'string', description: 'JSON-encoded AgentBatch. Existing Draft Board operations only.' } }, required: ['batch'], additionalProperties: false }, output,
     execute: async (args, exec) => { requireEnabled(); return jsonSafe(await store.apply(JSON.parse(args.batch), exec.signal)); } }));
+    releases.push(ctx.tools.register({name:'draft_board_layout_read',description:'Read the active layout task: existing content, relationships, allowed card IDs, actual visible card sizes and viewport. Only available for a layout task admitted through the whiteboard button.',
+      parameters:{type:'object',properties:{},additionalProperties:false},output,isConcurrencySafe:()=>true,
+      execute:async(_args,exec)=>{requireEnabled();return jsonSafe(await layouts.read(exec.agent));}}));
+    releases.push(ctx.tools.register({name:'draft_board_layout_apply',description:'Submit only candidate positions for the active layout task. Checks identity/version, scope, card/collection spacing and automatically routed edges before committing one undoable batch. A rejected candidate never changes the board. Empty positions finishes without history.',
+      parameters:{type:'object',properties:{taskId:{type:'string'},boardId:{type:'string'},baseContentVersion:{type:'integer',minimum:0},positions:{type:'array',items:{type:'object',properties:{nodeId:{type:'string'},x:{type:'number'},y:{type:'number'}},required:['nodeId','x','y'],additionalProperties:false}}},required:['taskId','boardId','baseContentVersion','positions'],additionalProperties:false},output,
+      execute:async(args,exec)=>{requireEnabled();return jsonSafe(await layouts.apply(args,exec));}}));
     releases.push(ctx.systemPrompt.section({ name: 'dsh-board', order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_SUFFIX') + 100,
       text: BOARD_INSTRUCTIONS }));
     releases.push(ctx.systemPrompt.context({ name: 'dsh-board', order: 1_000_000,
-      text: assembly => assembly.agent ? boardContext.render(assembly.agent.id, store.bundle.file.board.id) : '' }));
+      text: assembly => assembly.agent ? boardContext.render(assembly.agent.id, store.bundle.file.board.id) + (layouts.forAgent(assembly.agent) ? '\n' + LAYOUT_INSTRUCTIONS : '\nCurrent operation: ordinary whiteboard editing. Layout-task restrictions from earlier turns have ended.') : '' }));
   }
   reconcile();
   ctx.effect(() => () => { for (const release of releases) release(); });

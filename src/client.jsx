@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { associatedSession } from './submission.mjs';
+import { layoutSession, LAYOUT_REQUEST } from './layout-submission.mjs';
 import styles from './client.css';
 
-export const inject = ['slots', 'conversation'];
+export const inject = ['slots', 'conversation', 'sessions'];
 export function apply(ctx) {
   const style = document.createElement('style'); style.textContent = styles;
   document.head.append(style); ctx.effect(() => () => style.remove());
@@ -136,6 +137,23 @@ export function apply(ctx) {
       const message = event => {
         if (event.origin !== location.origin || event.source !== frame.current?.contentWindow || event.data?.source !== 'dsh-board') return;
         if (event.data.type === 'selection') { bridge.selection = event.data; setSelection(event.data); }
+        if (event.data.type === 'layout-request') {
+          const id=event.data.id;
+          const reply=value=>frame.current?.contentWindow.postMessage({source:'dsh-board-host',type:'layout-admitted',id,...value},location.origin);
+          void (async()=>{
+            const sessionId=ctx.sessions.list.getSnapshot().current;
+            const binding=sessionId && ctx.sessions.binding(sessionId);
+            if(!binding) throw new Error('请先新建或选择一个 DSH 对话，再整理布局。');
+            const bound=layoutSession(binding.session,event.data.snapshot,{
+              stage:(snapshot,signal)=>api('layout',snapshot,'POST',signal),
+              cancel:taskId=>api('layout?id='+encodeURIComponent(taskId),null,'DELETE'),
+              accepted:task=>reply({task}),
+              uncertain:(task,error)=>reply({task,error:'提交状态未确认：'+error.message+'。请查看原生对话或取消任务。'}),
+            });
+            const result=await originalSend.call(service,bound,LAYOUT_REQUEST,[],'queue');
+            if(result.kind !== 'success') throw new Error('布局任务未被接受。');
+          })().catch(error=>reply({error:error.message}));
+        }
         if (event.data.type === 'flushed') {
           const request = bridge.requests.get(event.data.id); if (!request) return;
           clearTimeout(request.timer); bridge.requests.delete(event.data.id);

@@ -13,7 +13,7 @@ import { chromium } from 'playwright-core';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const directory = await mkdtemp(join(tmpdir(), 'dsh-board-package-'));
 const artifacts = join(root, 'artifacts'); await mkdir(artifacts, { recursive: true });
-const releases = [], routes = new Map(), tools = new Map();
+const releases = [], routes = new Map(), tools = new Map(), events = new Map();
 let browser, server;
 try {
   const packed = await promisify(execFile)(process.execPath, [process.env.npm_execpath, 'pack', '--json', '--pack-destination', artifacts], { cwd: root, maxBuffer: 2 * 1024 * 1024 });
@@ -35,9 +35,9 @@ try {
   const { apply } = await import(pathToFileURL(join(installed, 'src/host.mjs')).href);
   await apply({
     effect: create => { const release = create(); releases.push(release); return release; },
-    on() {}, logger: { warn() {} },
+    on: (name,handler) => events.set(name,handler), logger: { warn() {} },
     connection: { fetch: { register: route => { routes.set(route.path, route); return () => routes.delete(route.path); } } },
-    tools: { register: definition => { tools.set(definition.name, definition); return () => tools.delete(definition.name); } },
+    tools: { register: definition => { tools.set(definition.name, definition); return () => tools.delete(definition.name); }, guard: () => () => {} },
     systemPrompt: { section: () => () => {}, context: () => () => {}, getSectionOrder: () => 10200 },
   }, { dataDir: join(directory, 'data') });
   server = createServer(async (incoming, outgoing) => {
@@ -61,6 +61,15 @@ try {
   }
   if (!browser) throw new Error('No test browser. ' + failures.join('; '));
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.addInitScript(()=>{
+    window.addEventListener('message',async event=>{
+      if(event.origin!==location.origin || event.source!==window || event.data?.source!=='dsh-board' || event.data.type!=='layout-request')return;
+      window.__layoutSnapshot=event.data.snapshot;
+      const response=await fetch('/api/dsh-board/layout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...event.data.snapshot,sessionId:'session1',requestId:'request1'})});
+      const task=await response.json();window.__layoutTask=task;
+      window.postMessage({source:'dsh-board-host',type:'layout-admitted',id:event.data.id,...response.ok?{task}:{error:task.error.message}},location.origin);
+    });
+  });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/api/dsh-board/ui/index.html?dshBoard=1', { waitUntil: 'networkidle' });
   await page.locator('.toolbar').waitFor();
@@ -69,9 +78,32 @@ try {
   const changed = await tools.get('draft_board_apply').execute({ batch: JSON.stringify({ batchVersion: '1.0', boardId: initial.board.id, baseContentVersion: initial.board.contentVersion, actor: 'agent', label: '安装包浏览器验证', ops: [{ op: 'addNode', node, before: null, after: node }] }) }, { signal: new AbortController().signal });
   assert.equal(changed.ok, true);
   await page.locator(`[data-node-id="${node.id}"]`).waitFor();
+  await page.waitForFunction(()=>window.__state.saveState==='saved');
+  await page.getByRole('button',{name:'AI 布局整理',exact:true}).click();
+  await page.waitForFunction(()=>window.__layoutTask?.id);
+  const layoutTask=await page.evaluate(()=>window.__layoutTask),layoutSnapshot=await page.evaluate(()=>window.__layoutSnapshot);
+  const measured=await page.locator(`[data-node-id="${node.id}"]`).evaluate(card=>({w:parseFloat(getComputedStyle(card).width),h:parseFloat(getComputedStyle(card).height)}));
+  assert.deepEqual(layoutSnapshot.geometry[node.id],measured,'layout uses real rendered dimensions');
+  const agent={id:'session1',ctx:{tools:{restrict:()=>()=>{}}}},exec={agent,signal:new AbortController().signal};
+  events.get('agent/inbox/claimed')({agent,message:{source:{kind:'user',rpcId:'request1'}}});
+  const layoutRead=await tools.get('draft_board_layout_read').execute({},exec);
+  assert.equal(layoutRead.taskId,layoutTask.id);
+  assert.equal((await tools.get('draft_board_layout_apply').execute({taskId:layoutTask.id,boardId:initial.board.id,baseContentVersion:layoutRead.baseContentVersion,positions:[{nodeId:node.id,x:400,y:300}]},exec)).ok,true);
+  await page.waitForFunction(()=>window.__state.file.nodes[0]?.x===400&&window.__state.saveState==='saved');
+  await page.getByRole('button',{name:'AI 布局整理',exact:true}).waitFor();
+  await page.screenshot({path:join(artifacts,'package-ai-layout.png')});
+  await page.getByRole('button',{name:'撤销最新一轮',exact:true}).click();
+  await page.waitForFunction(()=>window.__state.file.nodes[0]?.x===180&&window.__state.saveState==='saved');
+  assert.equal((await tools.get('draft_board_read').execute()).nodes[0].y,200,'one undo restores the whole layout');
+  events.get('agent/status')({agent,status:'idle'});
+  await page.reload({waitUntil:'networkidle'});await page.locator('.toolbar').waitFor();
+  // A fresh external content batch remains independently undoable after the layout round.
+  const current=await tools.get('draft_board_read').execute();
+  assert.equal((await tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:current.board.id,baseContentVersion:current.board.contentVersion,actor:'agent',label:'内容更新独立于布局',ops:[{op:'updateNodeCaption',nodeId:node.id,before:null,after:{caption:'合成回归内容'}}]})},{signal:new AbortController().signal})).ok,true);
+  await page.waitForFunction(()=>window.__state.file.nodes[0]?.caption==='合成回归内容');
   await page.getByRole('button', { name: '撤销最新一轮', exact: true }).click();
-  await page.waitForFunction(() => !window.__state.file.nodes.length && window.__state.saveState === 'saved');
-  assert.equal((await tools.get('draft_board_read').execute()).nodes.length, 0);
+  await page.waitForFunction(() => !window.__state.file.nodes[0]?.caption && window.__state.saveState === 'saved');
+  assert.equal((await tools.get('draft_board_read').execute()).nodes.length, 1);
   await page.reload({ waitUntil: 'networkidle' }); await page.locator('.toolbar').waitFor();
   assert.equal(await page.evaluate(() => window.__state.file.board.id), initial.board.id);
   assert.deepEqual(errors, []);

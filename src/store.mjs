@@ -45,7 +45,9 @@ export class BoardStore {
   }
   async persist(bundle, file, fileName, signal) {
     await this.atomic(join(this.directory, 'boards', file), serializeBoard(bundle.file, bundle.blobs), signal);
-    await this.atomic(join(this.directory, 'current.json'), JSON.stringify({ file, fileName }), signal);
+    // The board rename is the commit point. Once it succeeded, finish the
+    // pointer write even if cancellation arrives, then publish the same state.
+    await this.atomic(join(this.directory, 'current.json'), JSON.stringify({ file, fileName }));
   }
   exclusive(action) {
     const next = this.queue.then(() => this.ready).then(action);
