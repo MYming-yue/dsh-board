@@ -9,7 +9,7 @@ A persistent shared whiteboard beside the native DeepSeek Harness conversation.
 
 DSH-board 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地插件，基于 [draft-board](https://github.com/MYming-yue/draft-board)。白板保留理解和成果，对话用来提出问题、讨论与纠正：学一个概念、拆解一个产品，或持续打磨一个项目。
 
-公开试用版为 **0.1.5**，当前源码为 **0.1.7-dev.1 开发预览**（未发布正式新版）。插件单独维护宿主集成，白板界面和模型通过 [upstream.json](upstream.json) 固定上游提交构建，不维护两套白板代码。已构建的安装包可以独立安装，无需相邻的 draft-board 仓库；尚未发布到 npm。
+公开试用版为 **0.1.5**，当前源码为 **0.1.7-dev.2 开发预览**（未发布正式新版）。插件单独维护宿主集成，白板界面和模型通过 [upstream.json](upstream.json) 固定上游提交构建，不维护两套白板代码。已构建的安装包可以独立安装，无需相邻的 draft-board 仓库；尚未发布到 npm。
 
 ## 可以做什么
 
@@ -63,7 +63,7 @@ AI 使用 DSH 原有模型、工具和审批流程。插件不增加模型 API �
 
 ## AI 布局整理（开发预览）
 
-选择一个 DSH 对话后，点击白板顶栏“AI 布局整理”。普通点击整理全板，Shift 点击只整理选中卡片及父子后代。它使用当前 DSH 模型和原生对话，会产生一次模型请求；既有输入和待发附件保留。
+选择一个 DSH 对话后，点击白板顶栏“AI 布局整理”。普通点击整理全板，Shift 点击只整理选中卡片及父子后代。它使用当前 DSH 模型和原生对话，会产生一次模型请求；既有输入和待发附件保留。长指令与模型输出默认收进紧凑的布局任务入口，点击“查看过程”仍可展开。白板下方显示带轻量动画的真实状态，完成后自动收起，失败保留原因；系统选择减少动态效果时关闭动画。
 
 AI 读取内容、已有关系、集合与实际卡片外框，按清晰、克制、留白适度的原则组织布局。任务仅能提交坐标；不创建或删除卡片，不改正文、尺寸、关系或集合。候选通过几何检查后一次应用，可“撤销最新一轮”；失败保留原布局，最多三次候选。无需移动不增加历史。
 
@@ -118,7 +118,7 @@ npm run build
 npm pack --pack-destination artifacts
 ```
 
-贡献前阅读 [AGENTS.md](AGENTS.md) 和 [规格](docs/spec.md)。涉及宿主接口的变化仍需在实际 DSH 中联调，不能只用合成宿主检查宣称兼容。
+贡献前阅读 [AGENTS.md](AGENTS.md) 和 [规格](docs/spec.md)。涉及宿主接口的变化仍需在实际 DSH 中联调，不能只用合成宿主检查宣称兼容。布局呈现的本机组件联调可设置 `DSH_BOARD_NATIVE_ROOT` 为已安装 DSH 包下的 `node_modules`，执行 `node scripts/smoke-native-layout.mjs`：只读取本机前端源码，用真实 SlotCore 和 Chat 渲染器验证合成历史的折叠／展开，不读取个人会话或凭据、不调用模型 API。
 
 ## 来源与许可
 

@@ -45,6 +45,9 @@ try {
   routes.set('/_test/settings',{methods:['GET'],fetch:async()=>new Response('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>DSH-board 设置回归</title></head><body><main id="settings"></main><script src="/_test/harness.js"></script><script src="/_test/client.js"></script></body></html>',{headers:{'Content-Type':'text/html; charset=utf-8'}})});
   routes.set('/_test/harness.js',{methods:['GET'],fetch:async()=>new Response(harness.outputFiles[0].text,{headers:{'Content-Type':'text/javascript'}})});
   routes.set('/_test/client.js',{methods:['GET'],fetch:async()=>new Response(await readFile(join(installed,'lib/client.js')),{headers:{'Content-Type':'text/javascript'}})});
+  const panelHarness=await build({stdin:{contents:await readFile(join(root,'scripts/panel-harness.jsx'),'utf8'),resolveDir:join(root,'.upstream/draft-board'),loader:'jsx'},bundle:true,write:false,platform:'browser',format:'iife',jsx:'automatic',target:'es2022'});
+  routes.set('/_test/panel-harness.js',{methods:['GET'],fetch:async()=>new Response(panelHarness.outputFiles[0].text,{headers:{'Content-Type':'text/javascript'}})});
+  routes.set('/_test/panel',{methods:['GET'],fetch:async()=>new Response('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>html,body{margin:0;height:100%;font-family:system-ui}._centerCol_fixture{height:100vh}.native-chat{padding:24px;background:#fafafa}h3{margin-top:0}</style><main class="_centerCol_fixture"><div class="native-chat"><h3>原生对话</h3><p>请补充这张卡片的解释</p><textarea aria-label="对话输入">未发送的文字仍在这里</textarea></div></main><div id="overlay"></div><script src="/_test/panel-harness.js"></script><script src="/_test/client.js"></script></html>',{headers:{'Content-Type':'text/html; charset=utf-8'}})});
   server = createServer(async (incoming, outgoing) => {
     try {
       const url = new URL(incoming.url, `http://${incoming.headers.host}`), route = routes.get(url.pathname);
@@ -143,10 +146,65 @@ try {
   assert.equal(sections.get('dsh-board'),stablePrompt);assert.equal(tools.get('draft_board_apply'),stableTools);
   assert.equal((await tools.get('draft_board_read').execute()).revision,beforeGuide.revision,'guide saves do not change the draft');
   await page.screenshot({path:join(artifacts,'package-guide-settings.png'),fullPage:true});
+  await page.goto(origin+'/_test/panel',{waitUntil:'networkidle'});
+  const frame=page.frameLocator('iframe.dsh-board-frame');
+  await frame.locator('.toolbar').waitFor();
+  await frame.getByRole('button',{name:'AI 布局整理',exact:true}).click();
+  await page.locator('.dsh-layout-float[data-state=pending]').waitFor();
+  const admitted=await page.evaluate(()=>window.__panelAdmission);
+  assert.equal(admitted.content[0].text,'✦ 整理白板布局','native pending echoes contain a short task label, not raw instructions');
+  const panelTask=await page.evaluate(async()=>{const r=await fetch('/api/dsh-board/layout');return(await r.json()).task;});
+  const panelAgent={id:'panel-session',ctx:{tools:{restrict:()=>()=>{}}}},panelExec={agent:panelAgent,signal:new AbortController().signal};
+  events.get('agent/inbox/claimed')({agent:panelAgent,message:{source:{kind:'user',rpcId:admitted.requestId}}});
+  await page.locator('.dsh-layout-float[data-state=running]').waitFor();
+  await page.route('**/api/dsh-board/layout?id=*',async route=>{
+    if(route.request().method()==='GET' && route.request().frame()===page.mainFrame()) await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{message:'合成网络波动'}})});
+    else await route.continue();
+  });
+  await page.getByText('状态暂时无法读取，正在重连。合成网络波动',{exact:true}).waitFor();
+  assert.equal(await page.locator('.dsh-layout-float[data-state=failed]').count(),0,'temporary transport failure is not a failed task');
+  await page.unroute('**/api/dsh-board/layout?id=*');
+  await page.getByText('梳理关系，让空间更有秩序',{exact:true}).waitFor();
+  const panelRead=await tools.get('draft_board_layout_read').execute({},panelExec);
+  await page.waitForFunction(()=>getComputedStyle(document.querySelector('.dsh-layout-float')).opacity==='1');
+  await page.screenshot({path:join(artifacts,'package-layout-running.png')});
+  assert.equal((await tools.get('draft_board_layout_apply').execute({taskId:panelTask.id,boardId:panelRead.boardId,baseContentVersion:panelRead.baseContentVersion,positions:[{nodeId:node.id,x:360,y:240}]},panelExec)).ok,true);
+  await page.locator('.dsh-layout-float[data-state=completed]').waitFor();
+  await page.getByText('已整理 1 张卡片 · 可撤销这一轮',{exact:true}).waitFor();
+  await page.locator('.dsh-layout-float').waitFor({state:'hidden',timeout:10000});
+  await frame.getByRole('button',{name:'撤销最新一轮',exact:true}).click();
+  assert.equal(await page.getByRole('textbox',{name:'对话输入'}).inputValue(),'未发送的文字仍在这里');
+  events.get('agent/status')({agent:panelAgent,status:'idle'});
+  await frame.getByRole('button',{name:'AI 布局整理',exact:true}).click();
+  await page.locator('.dsh-layout-float[data-state=pending]').waitFor();
+  await page.route('**/api/dsh-board/layout?id=*',async route=>{
+    if(route.request().method()==='DELETE') await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{message:'取消断线'}})});
+    else await route.continue();
+  });
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.getByText('取消未确认，可重试。取消断线',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'取消',exact:true}).isVisible(),true);
+  await page.unroute('**/api/dsh-board/layout?id=*');
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.locator('.dsh-layout-float[data-state=cancelled]').waitFor();
+  await frame.getByRole('button',{name:'AI 布局整理',exact:true}).click();
+  await page.locator('.dsh-layout-float[data-state=pending]').waitFor();
+  const failedAdmission=await page.evaluate(()=>window.__panelAdmission);
+  events.get('agent/inbox/claimed')({agent:panelAgent,message:{source:{kind:'user',rpcId:failedAdmission.requestId}}});
+  events.get('agent/status')({agent:panelAgent,status:'idle'});
+  await page.locator('.dsh-layout-float[data-state=failed]').waitFor();
+  await page.getByRole('alert').filter({hasText:'这次整理未完成'}).waitFor();
+  await page.getByRole('button',{name:'收起布局提示',exact:true}).click();
+  assert.equal(await page.locator('.dsh-layout-float').count(),0);
+  await page.evaluate(()=>{window.__loseAdmissionOnce=true;});
+  await frame.getByRole('button',{name:'AI 布局整理',exact:true}).click();
+  await page.locator('.dsh-layout-float[data-state=pending]').waitFor();
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.locator('.dsh-layout-float[data-state=cancelled]').waitFor();
   assert.deepEqual(errors,[]);
   const checksum = createHash('sha256').update(await readFile(archive)).digest('hex');
   await writeFile(join(artifacts, metadata.filename + '.sha256'), `${checksum}  ${metadata.filename}\n`);
-  console.log(`PACKAGE PASS: extracted ${metadata.filename}; board round undo, editable guide settings, external-file refresh/conflict, exact prompt injection and no browser errors.`);
+  console.log(`PACKAGE PASS: extracted ${metadata.filename}; board round undo, editable guide, actual BoardPanel layout progress/completion/cancel/failure and preserved native input; no browser errors.`);
 } finally {
   await browser?.close();
   if (server) await new Promise(resolve => server.close(resolve));

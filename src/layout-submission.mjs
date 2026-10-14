@@ -1,5 +1,7 @@
 // Keep the task snapshot outside message text and bind it to native admission.
-export const LAYOUT_REQUEST = '整理白板布局。仅调整本次任务范围内的卡片位置，按内容与已有关系改善逻辑呈现和阅读观感；先读取布局任务，再提交候选坐标。';
+export const LAYOUT_REQUEST = '✦ 整理白板布局';
+// Kept for old native history and restored admissions; never rewrite history.
+export const LEGACY_LAYOUT_REQUEST = '整理白板布局。仅调整本次任务范围内的卡片位置，按内容与已有关系改善逻辑呈现和阅读观感；先读取布局任务，再提交候选坐标。';
 export function layoutSession(session, snapshot, transport) {
     return new Proxy(session, {
         get(target, key) {

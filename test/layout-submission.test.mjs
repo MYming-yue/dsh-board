@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { layoutSession, LAYOUT_REQUEST } from '../src/layout-submission.mjs';
+import { layoutSession, LAYOUT_REQUEST, LEGACY_LAYOUT_REQUEST } from '../src/layout-submission.mjs';
 import { LayoutTasks } from '../src/layout.mjs';
 
 test('restored toolbar messages without a snapshot remain closed to generic tools',()=>{
@@ -8,6 +8,8 @@ test('restored toolbar messages without a snapshot remain closed to generic tool
   tasks.claim(agent,{source:{kind:'user',rpcId:'old-request'},content:[{type:'text',text:LAYOUT_REQUEST}]});
   assert.equal(tasks.forAgent(agent).status,'failed');
   tasks.settle(agent);assert.equal(tasks.forAgent(agent),undefined);
+  tasks.claim(agent,{source:{kind:'user',rpcId:'legacy'},content:[{type:'text',text:LEGACY_LAYOUT_REQUEST}]});
+  assert.equal(tasks.forAgent(agent).status,'failed','legacy restored messages also remain restricted');
 });
 test('layout metadata is bound to native admission without injecting card contents into text', async () => {
     const events = [], signal = new AbortController().signal;

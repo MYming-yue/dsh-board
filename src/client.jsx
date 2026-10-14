@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import { associatedSession } from './submission.mjs';
 import { layoutSession, LAYOUT_REQUEST } from './layout-submission.mjs';
 import { GuideSettings } from './guide-settings.jsx';
+import { LayoutFeedback, installLayoutPresentation } from './layout-feedback.jsx';
 import styles from './client.css';
 
-export const inject = ['slots', 'conversation', 'sessions'];
+export const inject = ['slots', 'conversation', 'sessions', 'uiConversation'];
 export function apply(ctx) {
   const style = document.createElement('style'); style.textContent = styles;
   document.head.append(style); ctx.effect(() => () => style.remove());
@@ -13,6 +14,7 @@ export function apply(ctx) {
   let options = { enabled: true, associateSelection: true };
   const optionListeners = new Set();
   const publishOptions = next => { options = next; for (const listener of optionListeners) listener(next); };
+  installLayoutPresentation(ctx, () => useOptions().enabled);
   async function api(path, body, method = 'POST', signal) {
     const response = await fetch('/api/dsh-board/' + path, { method, signal, cache: 'no-store',
       ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
@@ -74,6 +76,31 @@ export function apply(ctx) {
       return Number.isFinite(saved) && saved >= 320 ? Math.min(saved, 900) : 420;
     });
     const [resizing, setResizing] = useState(false);
+    const [layoutFeedback, setLayoutFeedback] = useState(null);
+    useEffect(() => {
+      if (!preferences.enabled) return;
+      let stopped = false;
+      void api('layout',null,'GET').then(({task}) => { if (!stopped && task) setLayoutFeedback(task); }).catch(() => {});
+      return () => { stopped = true; };
+    }, [preferences.enabled]);
+    useEffect(() => {
+      if (!preferences.enabled || !layoutFeedback?.id || !['pending', 'running'].includes(layoutFeedback.status)) return;
+      let stopped = false, timeout;
+      async function poll() {
+        try {
+          const task = await api('layout?id=' + encodeURIComponent(layoutFeedback.id), null, 'GET');
+          if (!stopped) setLayoutFeedback(task);
+        } catch (error) {
+          if (!stopped) setLayoutFeedback(current => ({...current,message:'状态暂时无法读取，正在重连。'+error.message}));
+        } finally { if (!stopped) timeout = setTimeout(poll, 750); }
+      }
+      void poll(); return () => { stopped = true; clearTimeout(timeout); };
+    }, [preferences.enabled, layoutFeedback?.id, layoutFeedback?.status]);
+    useEffect(() => {
+      if (!['completed','cancelled'].includes(layoutFeedback?.status)) return;
+      const timeout = setTimeout(() => setLayoutFeedback(null), 6000);
+      return () => clearTimeout(timeout);
+    }, [layoutFeedback?.id, layoutFeedback?.status]);
     useEffect(() => {
       if (activePanel !== null) return;
       // Target the installed 0.1.5 AppFrame's centre column. Native nodes stay
@@ -140,20 +167,25 @@ export function apply(ctx) {
         if (event.data.type === 'selection') { bridge.selection = event.data; setSelection(event.data); }
         if (event.data.type === 'layout-request') {
           const id=event.data.id;
-          const reply=value=>frame.current?.contentWindow.postMessage({source:'dsh-board-host',type:'layout-admitted',id,...value},location.origin);
+          let stagedTask;
+          setLayoutFeedback({status:'submitting'});
+          const reply=value=>{
+            setLayoutFeedback(value.task ? {...value.task,...(value.error ? {message:value.error} : {})} : {status:'failed',message:value.error});
+            frame.current?.contentWindow.postMessage({source:'dsh-board-host',type:'layout-admitted',id,...value},location.origin);
+          };
           void (async()=>{
             const sessionId=ctx.sessions.list.getSnapshot().current;
             const binding=sessionId && ctx.sessions.binding(sessionId);
             if(!binding) throw new Error('请先新建或选择一个 DSH 对话，再整理布局。');
             const bound=layoutSession(binding.session,event.data.snapshot,{
-              stage:(snapshot,signal)=>api('layout',snapshot,'POST',signal),
-              cancel:taskId=>api('layout?id='+encodeURIComponent(taskId),null,'DELETE'),
+              stage:async(snapshot,signal)=>{stagedTask=await api('layout',snapshot,'POST',signal);return stagedTask;},
+              cancel:async taskId=>{stagedTask=await api('layout?id='+encodeURIComponent(taskId),null,'DELETE');return stagedTask;},
               accepted:task=>reply({task}),
               uncertain:(task,error)=>reply({task,error:'提交状态未确认：'+error.message+'。请查看原生对话或取消任务。'}),
             });
             const result=await originalSend.call(service,bound,LAYOUT_REQUEST,[],'queue');
             if(result.kind !== 'success') throw new Error('布局任务未被接受。');
-          })().catch(error=>reply({error:error.message}));
+          })().catch(error=>reply({...(stagedTask ? {task:stagedTask} : {}),error:error.message}));
         }
         if (event.data.type === 'flushed') {
           const request = bridge.requests.get(event.data.id); if (!request) return;
@@ -177,6 +209,9 @@ export function apply(ctx) {
         <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? '收起对话' : '展开对话'}</button>
       </header>
       <iframe ref={frame} className="dsh-board-frame" title="共同草稿白板" src="/api/dsh-board/ui/index.html?dshBoard=1" />
+      {preferences.enabled && <div className="dsh-layout-layer"><LayoutFeedback task={layoutFeedback}
+        onDismiss={() => setLayoutFeedback(null)}
+        onCancel={() => void api('layout?id='+encodeURIComponent(layoutFeedback.id),null,'DELETE').then(setLayoutFeedback).catch(error=>setLayoutFeedback(current=>({...current,message:'取消未确认，可重试。'+error.message})))} /></div>}
       <div className="dsh-board-divider" role="separator" aria-label="调整对话宽度" aria-orientation="vertical" tabIndex={open ? 0 : -1} hidden={!open}
         onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); setResizing(true); }}
         onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) resize(target.center.getBoundingClientRect().right - event.clientX); }}
