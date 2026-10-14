@@ -87,6 +87,24 @@ try {
   assert.equal(changed.ok, true);
   await page.locator(`[data-node-id="${node.id}"]`).waitFor();
   await page.waitForFunction(()=>window.__state.saveState==='saved');
+  // Native AI tools and the installed iframe share the same reversible appearance model.
+  const appearanceCurrent=await tools.get('draft_board_read').execute();
+  const finish={id:'n_flowpackage',type:'text',markdown:'由人确认',caption:'合成备注保留',shape:'pill',x:640,y:460,w:200};
+  const flowEdge={id:'e_flowpackage',kind:'association',from:node.id,to:finish.id,directed:true,label:'已厘清',routing:'orthogonal',stroke:'solid'};
+  assert.equal((await tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:appearanceCurrent.board.id,baseContentVersion:appearanceCurrent.board.contentVersion,actor:'agent',label:'安装包流程外形',ops:[
+    {op:'setNodeShape',nodeId:node.id,before:null,after:{shape:'diamond'}},
+    {op:'addNode',node:finish,before:null,after:finish},
+    {op:'addEdge',edge:flowEdge,before:null,after:flowEdge},
+  ]})},{signal:new AbortController().signal})).ok,true);
+  await page.locator(`[data-node-id="${node.id}"][data-node-shape="diamond"]`).waitFor();
+  await page.locator(`[data-node-id="${finish.id}"][data-node-shape="pill"]`).waitFor();
+  await page.waitForFunction(()=>window.__state.saveState==='saved');
+  assert.equal((await tools.get('draft_board_read').execute()).edges[0].routing,'orthogonal');
+  await page.screenshot({path:join(artifacts,'package-flow-appearance.png')});
+  await page.reload({waitUntil:'networkidle'});await page.locator('.toolbar').waitFor();
+  await page.locator(`[data-node-id="${node.id}"][data-node-shape="diamond"]`).waitFor();
+  await page.getByRole('button',{name:'撤销',exact:true}).click();
+  await page.waitForFunction(()=>window.__state.file.nodes.length===1&&!window.__state.file.nodes[0].shape&&window.__state.file.edges.length===0&&window.__state.saveState==='saved');
   await page.getByRole('button',{name:'AI 布局整理',exact:true}).click();
   await page.waitForFunction(()=>window.__layoutTask?.id);
   const layoutTask=await page.evaluate(()=>window.__layoutTask),layoutSnapshot=await page.evaluate(()=>window.__layoutSnapshot);

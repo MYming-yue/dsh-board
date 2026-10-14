@@ -9,12 +9,13 @@ A persistent shared whiteboard beside the native DeepSeek Harness conversation.
 
 DSH-board 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地插件，基于 [draft-board](https://github.com/MYming-yue/draft-board)。白板保留理解和成果，对话用来提出问题、讨论与纠正：学一个概念、拆解一个产品，或持续打磨一个项目。
 
-公开试用版为 **0.1.5**，当前源码为 **0.1.7-dev.2 开发预览**（未发布正式新版）。插件单独维护宿主集成，白板界面和模型通过 [upstream.json](upstream.json) 固定上游提交构建，不维护两套白板代码。已构建的安装包可以独立安装，无需相邻的 draft-board 仓库；尚未发布到 npm。
+公开试用版为 **0.1.5**，当前源码为 **0.1.8-dev.1 开发预览**（未发布正式新版）。插件单独维护宿主集成，白板界面和模型通过 [upstream.json](upstream.json) 固定上游提交构建，不维护两套白板代码。已构建的安装包可以独立安装，无需相邻的 draft-board 仓库；尚未发布到 npm。
 
 ## 可以做什么
 
 - 完整白板在左，DSH 原生对话在右；对话可展开／收起，分隔线可拖动调整宽度。
 - 保留 Markdown、LaTeX、图片、卡片备注、关系、集合、布局、结构视图、历史和撤销／重做。
+- 选中卡片／连线，通过“外形与连线”选择步骤矩形、判断菱形、起止圆角、实线／虚线和流程折线，支持分叉、汇合与反馈路径。使用新样式后文件升级为 3.0，新版可读取旧草稿。
 - 新开或切换聊天继续同一张白板，直到主动“新建”或“打开”另一份草稿。
 - 选中卡片后发消息，AI 知道本条回复所指的对象；不改写用户回复，不自动附上卡片全文。
 - AI 通过 `draft_board_read`／`draft_board_apply` 主动维护白板，复用原子批次、版本校验与整轮撤销。
