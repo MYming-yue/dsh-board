@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { BoardStore } from './store.mjs';
 import { BoardContext, BOARD_INSTRUCTIONS } from './context.mjs';
 import { LayoutTasks, LAYOUT_INSTRUCTIONS } from './layout.mjs';
+import { BoardGuide } from './guide.mjs';
 
 export const name = 'dsh-board';
 export const inject = ['connection', 'tools', 'systemPrompt'];
@@ -21,6 +22,8 @@ export async function apply(ctx, config = {}) {
   await store.ready;
   const boardContext = new BoardContext(join(store.directory, 'plugin-state.json'));
   await boardContext.ready;
+  const guide = new BoardGuide(store.directory);
+  await guide.ready;
   const layouts = new LayoutTasks(store);
   const layoutRestrictions = new Map();
   const releaseLayout = agent => { layoutRestrictions.get(agent.id)?.(); layoutRestrictions.delete(agent.id); };
@@ -29,6 +32,11 @@ export async function apply(ctx, config = {}) {
   const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const register = route => ctx.effect(() => ctx.connection.fetch.register(route));
   const options = () => ({ ...boardContext.options, version, draftName: store.bundle.file.board.name, fileName: store.fileName });
+  register({ path: '/api/dsh-board/guide', methods: ['GET','POST'], requestBody: 'buffered',
+    fetch: async request => {
+      try { return json(request.method === 'POST' ? await guide.save(await request.json()) : await guide.read()); }
+      catch(error) { return json({error:{code:error.code ?? 'E_GUIDE_INVALID',message:error.message}},error.code === 'E_GUIDE_CONFLICT' ? 409 : 400); }
+    } });
   register({ path: '/api/dsh-board/options', methods: ['GET', 'POST'], requestBody: 'buffered',
     fetch: async request => {
       try {
@@ -45,7 +53,7 @@ export async function apply(ctx, config = {}) {
       try {
         const value = await request.json();
         if (request.method === 'DELETE') await boardContext.discard(value.sessionId, value.requestId);
-        else await boardContext.stage(value.sessionId, value.requestId, boardContext.options.enabled && boardContext.options.associateSelection ? value.selection : null);
+        else { await guide.read(); await boardContext.stage(value.sessionId, value.requestId, boardContext.options.enabled && boardContext.options.associateSelection ? value.selection : null); }
         return json({ ok: true });
       } catch (error) { return json({ error: { message: error.message } }, 400); }
     } });
@@ -62,7 +70,7 @@ export async function apply(ctx, config = {}) {
     fetch: async request => {
       try {
         if (!boardContext.options.enabled) throw new Error('DSH-board is disabled');
-        if (request.method === 'POST') return json(await layouts.create(await request.json()));
+        if (request.method === 'POST') { await guide.read(); return json(await layouts.create(await request.json())); }
         const id = new URL(request.url).searchParams.get('id');
         if(request.method==='GET' && !id) return json({task:[...layouts.tasks.values()].filter(t=>['pending','running'].includes(t.status)).map(t=>layouts.public(t))[0] ?? null});
         return json(request.method === 'DELETE' ? layouts.cancel(id) : layouts.public(layouts.get(id)));
@@ -99,9 +107,16 @@ export async function apply(ctx, config = {}) {
   }
   await mountFiles();
   let releases = [];
+  let guideRelease = null;
+  function updateGuideSection() {
+    guideRelease?.(); guideRelease = null;
+    if (boardContext.options.enabled && guide.text.trim()) guideRelease = ctx.systemPrompt.section({name:'dsh-board-guide',
+      order:ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_SUFFIX')+101,text:guide.text});
+  }
   function reconcile() {
     for (const release of releases) release();
     releases = [];
+    updateGuideSection();
     if (!boardContext.options.enabled) {
       for(const task of layouts.tasks.values())if(['pending','running'].includes(task.status))layouts.cancel(task.id);
       layouts.active.clear();for(const release of layoutRestrictions.values())release();layoutRestrictions.clear();
@@ -112,7 +127,7 @@ export async function apply(ctx, config = {}) {
     description: 'Read the current shared whiteboard before maintaining it. Returns card identities, content, relations and contentVersion. Runtime card associations identify objects, not supplied card contents.',
     parameters: { type: 'object', properties: {}, additionalProperties: false }, output,
     isConcurrencySafe: () => true,
-    execute: async () => { requireEnabled(); return jsonSafe(await store.read()); } }));
+    execute: async () => { requireEnabled(); await guide.read(); return jsonSafe(await store.read()); } }));
     releases.push(ctx.tools.register({ name: 'draft_board_apply',
     description: 'Actively maintain the current shared whiteboard with one validated, undoable Draft Board batch. Read first, then send batchVersion=1.0, boardId, baseContentVersion, actor=agent, label and ops. Identity/version conflicts require reading again.',
     parameters: { type: 'object', properties: { batch: { type: 'string', description: 'JSON-encoded AgentBatch. Existing Draft Board operations only.' } }, required: ['batch'], additionalProperties: false }, output,
@@ -129,5 +144,10 @@ export async function apply(ctx, config = {}) {
       text: assembly => assembly.agent ? boardContext.render(assembly.agent.id, store.bundle.file.board.id) + (layouts.forAgent(assembly.agent) ? '\n' + LAYOUT_INSTRUCTIONS : '\nCurrent operation: ordinary whiteboard editing. Layout-task restrictions from earlier turns have ended.') : '' }));
   }
   reconcile();
-  ctx.effect(() => () => { for (const release of releases) release(); });
+  ctx.effect(() => guide.subscribe(updateGuideSection));
+  ctx.effect(() => {
+    const timer = setInterval(() => { void guide.read().catch(() => ctx.logger.warn('DSH-board guide refresh failed')); },1500);
+    timer.unref?.(); return () => clearInterval(timer);
+  });
+  ctx.effect(() => () => { guideRelease?.(); for (const release of releases) release(); });
 }

@@ -9,11 +9,12 @@ import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { Script } from 'node:vm';
 import { chromium } from 'playwright-core';
+import { build } from 'esbuild';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const directory = await mkdtemp(join(tmpdir(), 'dsh-board-package-'));
 const artifacts = join(root, 'artifacts'); await mkdir(artifacts, { recursive: true });
-const releases = [], routes = new Map(), tools = new Map(), events = new Map();
+const releases = [], routes = new Map(), tools = new Map(), events = new Map(), sections = new Map();
 let browser, server;
 try {
   const packed = await promisify(execFile)(process.execPath, [process.env.npm_execpath, 'pack', '--json', '--pack-destination', artifacts], { cwd: root, maxBuffer: 2 * 1024 * 1024 });
@@ -23,7 +24,7 @@ try {
     assert.ok(!/^(\.upstream|node_modules|artifacts|\.env)(\/|$)/.test(file.path));
   }
   const paths = new Set(metadata.files.map(file => file.path));
-  for (const path of ['src/host.mjs', 'lib/model.js', 'lib/client.js', 'lib/board-ui/index.html', 'lib/upstream.json', 'lib/upstream-LICENSE', 'lib/THIRD_PARTY_NOTICES.txt', 'LICENSE', 'docs/spec.md']) assert.ok(paths.has(path), `Package missing ${path}`);
+  for (const path of ['src/host.mjs', 'src/guide.mjs', 'docs/board-guide.md', 'lib/model.js', 'lib/client.js', 'lib/board-ui/index.html', 'lib/upstream.json', 'lib/upstream-LICENSE', 'lib/THIRD_PARTY_NOTICES.txt', 'LICENSE', 'docs/spec.md']) assert.ok(paths.has(path), `Package missing ${path}`);
   const archive = join(artifacts, metadata.filename);
   await promisify(execFile)('tar', ['-xzf', archive, '-C', directory]);
   const installed = join(directory, 'package');
@@ -38,8 +39,12 @@ try {
     on: (name,handler) => events.set(name,handler), logger: { warn() {} },
     connection: { fetch: { register: route => { routes.set(route.path, route); return () => routes.delete(route.path); } } },
     tools: { register: definition => { tools.set(definition.name, definition); return () => tools.delete(definition.name); }, guard: () => () => {} },
-    systemPrompt: { section: () => () => {}, context: () => () => {}, getSectionOrder: () => 10200 },
+    systemPrompt: { section: definition => { sections.set(definition.name,definition);return ()=>sections.delete(definition.name); }, context: () => () => {}, getSectionOrder: () => 10200 },
   }, { dataDir: join(directory, 'data') });
+  const harness=await build({stdin:{contents:await readFile(join(root,'scripts/guide-settings-harness.jsx'),'utf8'),resolveDir:join(root,'.upstream/draft-board'),loader:'jsx'},bundle:true,write:false,platform:'browser',format:'iife',jsx:'automatic',target:'es2022'});
+  routes.set('/_test/settings',{methods:['GET'],fetch:async()=>new Response('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>DSH-board 设置回归</title></head><body><main id="settings"></main><script src="/_test/harness.js"></script><script src="/_test/client.js"></script></body></html>',{headers:{'Content-Type':'text/html; charset=utf-8'}})});
+  routes.set('/_test/harness.js',{methods:['GET'],fetch:async()=>new Response(harness.outputFiles[0].text,{headers:{'Content-Type':'text/javascript'}})});
+  routes.set('/_test/client.js',{methods:['GET'],fetch:async()=>new Response(await readFile(join(installed,'lib/client.js')),{headers:{'Content-Type':'text/javascript'}})});
   server = createServer(async (incoming, outgoing) => {
     try {
       const url = new URL(incoming.url, `http://${incoming.headers.host}`), route = routes.get(url.pathname);
@@ -108,9 +113,40 @@ try {
   assert.equal(await page.evaluate(() => window.__state.file.board.id), initial.board.id);
   assert.deepEqual(errors, []);
   await page.screenshot({ path: join(artifacts, 'package-smoke.png') });
+  const stablePrompt=sections.get('dsh-board'),stableTools=tools.get('draft_board_apply'),beforeGuide=await tools.get('draft_board_read').execute();
+  const guidePath=join(directory,'data/board-guide.md'),standard=await readFile(join(installed,'docs/board-guide.md'),'utf8');
+  await page.goto(origin+'/_test/settings',{waitUntil:'networkidle'});
+  const editor=page.getByRole('textbox',{name:'白板使用方法提示词',exact:true});
+  await page.waitForFunction(()=>document.getElementById('dsh-board-guide-text')?.value.startsWith('# DSH-board'));
+  assert.equal(await editor.inputValue(),sections.get('dsh-board-guide').text);
+  await editor.fill('核心只写结论；解释放备注。\n父子卡和集合各司其职。');
+  await page.getByRole('button',{name:'保存修改',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('[role=status]')?.textContent.startsWith('已保存'));
+  assert.equal(await readFile(guidePath,'utf8'),await editor.inputValue());
+  assert.equal(sections.get('dsh-board-guide').text,await editor.inputValue());
+  await writeFile(guidePath,'本地编辑器修改：公式独立，说明入备注。','utf8');
+  await page.waitForFunction(()=>document.getElementById('dsh-board-guide-text')?.value==='本地编辑器修改：公式独立，说明入备注。');
+  assert.equal(sections.get('dsh-board-guide').text,await editor.inputValue());
+  await editor.fill('尚未保存的设置页草稿');
+  await writeFile(guidePath,'另一份本地修改，不能覆盖。','utf8');
+  await page.waitForFunction(()=>document.querySelector('[role=status]')?.textContent.includes('本地文件有更新'));
+  assert.equal(await editor.inputValue(),'尚未保存的设置页草稿');
+  assert.equal(await page.getByRole('button',{name:'保存修改',exact:true}).isDisabled(),true);
+  await page.getByRole('button',{name:'重新读取本地文件',exact:true}).click();
+  await page.waitForFunction(()=>document.getElementById('dsh-board-guide-text')?.value==='另一份本地修改，不能覆盖。');
+  await page.getByRole('button',{name:'载入标准方法',exact:true}).click();
+  assert.equal(await readFile(guidePath,'utf8'),'另一份本地修改，不能覆盖。','loading standard is an editable preview, not an immediate overwrite');
+  await page.getByRole('button',{name:'保存修改',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('[role=status]')?.textContent.startsWith('已保存'));
+  assert.equal((await readFile(guidePath,'utf8')).replace(/\r\n/g,'\n'),standard.replace(/\r\n/g,'\n'));
+  assert.equal(await readFile(join(directory,'data/board-guide.previous.md'),'utf8'),'另一份本地修改，不能覆盖。');
+  assert.equal(sections.get('dsh-board'),stablePrompt);assert.equal(tools.get('draft_board_apply'),stableTools);
+  assert.equal((await tools.get('draft_board_read').execute()).revision,beforeGuide.revision,'guide saves do not change the draft');
+  await page.screenshot({path:join(artifacts,'package-guide-settings.png'),fullPage:true});
+  assert.deepEqual(errors,[]);
   const checksum = createHash('sha256').update(await readFile(archive)).digest('hex');
   await writeFile(join(artifacts, metadata.filename + '.sha256'), `${checksum}  ${metadata.filename}\n`);
-  console.log(`PACKAGE PASS: extracted ${metadata.filename}; embedded UI, tool batch, round undo, reload, notices and no browser errors.`);
+  console.log(`PACKAGE PASS: extracted ${metadata.filename}; board round undo, editable guide settings, external-file refresh/conflict, exact prompt injection and no browser errors.`);
 } finally {
   await browser?.close();
   if (server) await new Promise(resolve => server.close(resolve));

@@ -24,3 +24,13 @@
 .dsh-board-settings input { width:18px; height:18px; accent-color:#5876e9; }
 .dsh-board-settings p { margin:8px 0 16px; font-size:14px; }
 .dsh-board-settings [role=alert] { color:#c63a3a; }
+.dsh-board-guide-settings { margin-top:32px; padding-top:20px; border-top:1px solid color-mix(in srgb,currentColor 20%,transparent); }
+.dsh-board-guide-settings h3 { margin:0 0 12px; font-size:18px; }
+.dsh-board-guide-settings .dsh-board-guide-label { margin:12px 0 8px; }
+.dsh-board-guide-settings textarea { display:block; width:100%; min-height:320px; box-sizing:border-box; resize:vertical; padding:12px; border:1px solid color-mix(in srgb,currentColor 30%,transparent); border-radius:6px; background:Canvas; color:CanvasText; font:14px/1.65 ui-monospace,monospace; }
+.dsh-board-guide-path code { overflow-wrap:anywhere; user-select:text; }
+.dsh-board-guide-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px; }
+.dsh-board-guide-actions button { padding:7px 12px; border:1px solid color-mix(in srgb,currentColor 25%,transparent); border-radius:5px; background:Canvas; color:CanvasText; cursor:pointer; }
+.dsh-board-guide-actions button:disabled { opacity:.5; cursor:default; }
+.dsh-board-guide-settings summary { cursor:pointer; }
+.dsh-board-guide-settings pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; font:14px/1.65 ui-monospace,monospace; background:color-mix(in srgb,currentColor 5%,transparent); }

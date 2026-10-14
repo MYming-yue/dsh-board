@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { associatedSession } from './submission.mjs';
 import { layoutSession, LAYOUT_REQUEST } from './layout-submission.mjs';
+import { GuideSettings } from './guide-settings.jsx';
 import styles from './client.css';
 
 export const inject = ['slots', 'conversation', 'sessions'];
@@ -16,7 +17,7 @@ export function apply(ctx) {
     const response = await fetch('/api/dsh-board/' + path, { method, signal, cache: 'no-store',
       ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error?.message ?? 'DSH-board 请求失败');
+    if (!response.ok) throw Object.assign(new Error(result.error?.message ?? 'DSH-board 请求失败'), {code:result.error?.code});
     return result;
   }
   let disposed = false;
@@ -203,9 +204,10 @@ export function apply(ctx) {
       <p>关闭后恢复完整聊天界面，暂停白板工具；草稿保留，再次启用继续维护。</p>
       <label><input type="checkbox" checked={preferences.associateSelection} disabled={saving || !preferences.enabled} onChange={e => void change('associateSelection', e.target.checked)} />发送时关联选中的卡片</label>
       <p>只关联身份和短标题，不附上正文。信息放入本轮上下文，不显示在你的回复里。</p>
-      <p>白板使用说明保持固定，关联快照在上下文末尾按变化更新。</p>
+      <p>协作规则保持固定；下方方法说明按你的修改更新，卡片关联放在本轮上下文末尾。</p>
       {error && <p role="alert">{error}</p>}
       {saving && <p role="status">正在保存…</p>}
+      <GuideSettings api={api} />
     </section>;
   }
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-board' }, BoardPanel));

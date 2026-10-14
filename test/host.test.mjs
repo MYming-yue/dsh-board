@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { apply } from '../src/host.mjs';
@@ -22,6 +22,20 @@ test('host uses fixed prompt tail and runtime context; management disables tools
   const before = await tools.get('draft_board_read').execute();
   const prompt = sections.get('dsh-board');
   assert.ok(prompt.order > 10200); assert.equal(typeof prompt.text, 'string');
+  const guideRoute=routes.get('/api/dsh-board/guide');
+  const guideRead=async()=> (await guideRoute.fetch(new Request('http://localhost/api/dsh-board/guide'))).json();
+  const initialGuide=await guideRead();
+  assert.equal(sections.get('dsh-board-guide').text,initialGuide.text,'user-visible file is the injected guide');
+  const stableReadTool=tools.get('draft_board_read');
+  const customGuide=await (await post('guide',{revision:initialGuide.revision,text:'核心只写结论，解释放备注。'})).json();
+  assert.equal(sections.get('dsh-board-guide').text,customGuide.text);
+  assert.equal(sections.get('dsh-board'),prompt,'guide edits do not change fixed collaboration rules');
+  assert.equal(tools.get('draft_board_read'),stableReadTool,'guide edits do not replace stable tools');
+  const guideSection=sections.get('dsh-board-guide');await guideRead();
+  assert.equal(sections.get('dsh-board-guide'),guideSection,'unchanged guide does not re-register prompt');
+  assert.equal((await post('guide',{revision:initialGuide.revision,text:'stale'})).status,409);
+  await writeFile(initialGuide.path,'父子卡表达层级；集合表达并列。','utf8');
+  const externalGuide=await guideRead();assert.equal(sections.get('dsh-board-guide').text,externalGuide.text);
   assert.equal(contexts.get('dsh-board').order, 1_000_000);
   await post('association', { sessionId: 'session1', requestId: 'request1', selection: { boardId: before.board.id, cards: [{ id: 'n_card001', title: 'A' }] } });
   events.get('agent/inbox/claimed')({ agent: { id: 'session1' }, message: { source: { kind: 'user', rpcId: 'request1' } } });
@@ -33,7 +47,10 @@ test('host uses fixed prompt tail and runtime context; management disables tools
   assert.equal((await post('options', { enabled: false })).status, 200);
   assert.equal(tools.size, 0); assert.equal(sections.size, 0); assert.equal(contexts.size, 0);
   await assert.rejects(read.execute(), /disabled/);
+  assert.equal((await post('guide',{revision:externalGuide.revision,text:'关闭期间仍可编辑方法。'})).status,200);
+  assert.equal(sections.size,0,'editing a disabled plugin does not enable prompt injection');
   assert.equal((await post('options', { enabled: true })).status, 200);
+  assert.equal(sections.get('dsh-board-guide').text,'关闭期间仍可编辑方法。');
   assert.equal((await tools.get('draft_board_read').execute()).board.id, before.board.id);
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-board",
-  "version": "0.1.6-dev.1",
+  "version": "0.1.7-dev.1",
   "private": true,
   "type": "module",
   "description": "A persistent shared whiteboard beside the native DeepSeek Harness conversation",
@@ -24,6 +24,7 @@
     "README.md",
     "LICENSE",
     "docs/spec.md",
+    "docs/board-guide.md",
     "upstream.json"
   ],
   "exports": {
