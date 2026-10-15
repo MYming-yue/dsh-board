@@ -32,13 +32,13 @@ test('AI appearance batches survive persistence and undo without changing the kn
   const { store, directory } = await fixture(t), { a, edge } = await seed(store);
   assert.equal((await apply(store, [
     { op: 'setNodeShape', nodeId: a.id, before: null, after: { shape: 'diamond' } },
-    { op: 'setEdgeStyle', edgeId: edge.id, before: null, after: { routing: 'orthogonal', stroke: 'solid' } },
+    { op: 'setEdgeStyle', edgeId: edge.id, before: null, after: { routing: 'orthogonal', stroke: 'flowing-dashed' } },
   ])).ok, true);
   const resumed = new BoardStore(directory); await resumed.ready;
   const current = await resumed.read();
   assert.deepEqual(current.nodes[0], { ...a, shape: 'diamond' });
-  assert.deepEqual(current.edges[0], { ...edge, routing: 'orthogonal', stroke: 'solid' });
-  assert.match(current.operations, /setNodeShape/); assert.match(current.operations, /setEdgeStyle/);
+  assert.deepEqual(current.edges[0], { ...edge, routing: 'orthogonal', stroke: 'flowing-dashed' });
+  assert.match(current.operations, /setNodeShape/); assert.match(current.operations, /setEdgeStyle/); assert.match(current.operations, /flowing-dashed/);
   const file = parseBoard(Buffer.from((await resumed.snapshot()).data, 'base64')).file;
   assert.equal(file.formatVersion, '3.0');
   assert.equal((await apply(resumed, invertOps(file.history.at(-1).ops))).ok, true);
@@ -49,9 +49,14 @@ test('AI appearance batches survive persistence and undo without changing the kn
 test('an invalid appearance batch cannot publish a partial update or change revision', async t => {
   const { store } = await fixture(t), { a, edge } = await seed(store);
   const before = await store.snapshot();
-  assert.equal((await apply(store, [
-    { op: 'setNodeShape', nodeId: a.id, before: null, after: { shape: 'diamond' } },
-    { op: 'setEdgeStyle', edgeId: edge.id, before: null, after: { routing: 'orthogonal', stroke: 'solid', label: '越界改写' } },
-  ])).ok, false);
-  assert.deepEqual(await store.snapshot(), before);
+  for (const after of [
+    { routing: 'orthogonal', stroke: 'solid', label: '越界改写' },
+    { routing: 'orthogonal', stroke: 'flow' },
+  ]) {
+    assert.equal((await apply(store, [
+      { op: 'setNodeShape', nodeId: a.id, before: null, after: { shape: 'diamond' } },
+      { op: 'setEdgeStyle', edgeId: edge.id, before: null, after },
+    ])).ok, false);
+    assert.deepEqual(await store.snapshot(), before);
+  }
 });

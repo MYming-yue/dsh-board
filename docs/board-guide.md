@@ -24,6 +24,7 @@
 
 - 文本／公式卡可选 `shape: rectangle`（步骤）、`diamond`（判断／选择）、`pill`（起止）；缺省／`card` 为普通知识卡。保留有用的核心和备注，不为外形复制卡片或删掉依据。
 - 流程关联仍用 `association`，设 `directed:true,routing:"orthogonal",stroke:"solid"`，把条件或关系写在 label。父子边继续表达层级。曲线、折线、实线、虚线可混合，虚线用于补充联系时用标签说明，不靠样式断言结论。
+- 需要强调阅读方向时可用 `stroke:"flowing-dashed"`，虚线沿箭头移动；无向边保持静态。少量使用，不将流动当成执行中或完成进度；PNG 仍是静态虚线。
 - 既有卡片外形用 `setNodeShape`；既有边画法用 `setEdgeStyle`，after 同时提供 routing 与 stroke。null 恢复默认；不改变端点、方向、标签和内容。
 - 表达多个选项时写明各自条件；人的权衡保留理由与未定项。布局任务只能移动已有卡片，不能借整理改外形、连线或替人做决定。
 

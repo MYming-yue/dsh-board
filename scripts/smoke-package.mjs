@@ -81,6 +81,7 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/api/dsh-board/ui/index.html?dshBoard=1', { waitUntil: 'networkidle' });
   await page.locator('.toolbar').waitFor();
+  assert.equal(await page.locator('.app-version').textContent(), 'v0.2.3');
   const initial = await tools.get('draft_board_read').execute();
   const node = { id: 'n_package001', type: 'text', markdown: '独立安装包验证', x: 180, y: 200, w: 240 };
   const changed = await tools.get('draft_board_apply').execute({ batch: JSON.stringify({ batchVersion: '1.0', boardId: initial.board.id, baseContentVersion: initial.board.contentVersion, actor: 'agent', label: '安装包浏览器验证', ops: [{ op: 'addNode', node, before: null, after: node }] }) }, { signal: new AbortController().signal });
@@ -90,7 +91,7 @@ try {
   // Native AI tools and the installed iframe share the same reversible appearance model.
   const appearanceCurrent=await tools.get('draft_board_read').execute();
   const finish={id:'n_flowpackage',type:'text',markdown:'由人确认',caption:'合成备注保留',shape:'pill',x:640,y:460,w:200};
-  const flowEdge={id:'e_flowpackage',kind:'association',from:node.id,to:finish.id,directed:true,label:'已厘清',routing:'orthogonal',stroke:'solid'};
+  const flowEdge={id:'e_flowpackage',kind:'association',from:node.id,to:finish.id,directed:true,label:'已厘清',routing:'orthogonal',stroke:'flowing-dashed'};
   assert.equal((await tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:appearanceCurrent.board.id,baseContentVersion:appearanceCurrent.board.contentVersion,actor:'agent',label:'安装包流程外形',ops:[
     {op:'setNodeShape',nodeId:node.id,before:null,after:{shape:'diamond'}},
     {op:'addNode',node:finish,before:null,after:finish},
@@ -100,9 +101,18 @@ try {
   await page.locator(`[data-node-id="${finish.id}"][data-node-shape="pill"]`).waitFor();
   await page.waitForFunction(()=>window.__state.saveState==='saved');
   assert.equal((await tools.get('draft_board_read').execute()).edges[0].routing,'orthogonal');
+  assert.equal((await tools.get('draft_board_read').execute()).edges[0].stroke,'flowing-dashed');
+  const flowingPath=page.locator(`[data-edge-id="${flowEdge.id}"] .edge-path`);
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await page.waitForFunction(()=>document.querySelector('.edge-flow-active')?.getAnimations().length===1);
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.waitForFunction(()=>document.querySelector('.edge-flow-active')?.getAnimations().length===0);
+  assert.equal(await flowingPath.evaluate(el=>getComputedStyle(el).strokeDasharray),'6px, 4px');
+  await page.emulateMedia({reducedMotion:'no-preference'});
   await page.screenshot({path:join(artifacts,'package-flow-appearance.png')});
   await page.reload({waitUntil:'networkidle'});await page.locator('.toolbar').waitFor();
   await page.locator(`[data-node-id="${node.id}"][data-node-shape="diamond"]`).waitFor();
+  await page.waitForFunction(()=>document.querySelector('.edge-flow-active')?.getAnimations().length===1);
   await page.getByRole('button',{name:'撤销',exact:true}).click();
   await page.waitForFunction(()=>window.__state.file.nodes.length===1&&!window.__state.file.nodes[0].shape&&window.__state.file.edges.length===0&&window.__state.saveState==='saved');
   await page.getByRole('button',{name:'AI 布局整理',exact:true}).click();
