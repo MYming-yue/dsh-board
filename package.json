@@ -1,29 +1,60 @@
 {
   "name": "dsh-board",
-  "version": "0.1.5",
+  "version": "0.1.8-dev.2",
   "private": true,
   "type": "module",
   "description": "A persistent shared whiteboard beside the native DeepSeek Harness conversation",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/MYming-yue/dsh-board.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MYming-yue/dsh-board.git"
+  },
   "homepage": "https://github.com/MYming-yue/dsh-board",
-  "bugs": { "url": "https://github.com/MYming-yue/dsh-board/issues" },
-  "engines": { "node": ">=22" },
+  "bugs": {
+    "url": "https://github.com/MYming-yue/dsh-board/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "main": "src/host.mjs",
-  "files": ["src", "lib", "cordis.patch.yml", "README.md", "LICENSE", "docs/spec.md", "upstream.json"],
-  "exports": { ".": "./src/host.mjs", "./client": "./lib/client.js", "./package.json": "./package.json" },
+  "files": [
+    "src",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "docs/spec.md",
+    "docs/board-guide.md",
+    "upstream.json"
+  ],
+  "exports": {
+    ".": "./src/host.mjs",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test test/*.test.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
     "check": "npm run build && npm test && npm run smoke:package"
   },
-  "devDependencies": { "esbuild": "0.21.5", "playwright-core": "1.63.0" },
+  "devDependencies": {
+    "esbuild": "0.21.5",
+    "playwright-core": "1.63.0"
+  },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-ui-renderer", "@deepseek-ai/dsh-client-ui-conversation", "@deepseek-ai/dsh-client-ui-layout"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-api-session-controller"
+      ]
     }
   }
 }

@@ -8,6 +8,37 @@
 .dsh-board-sync { font-size:11px; opacity:.7; }
 .dsh-board-strip button { padding:4px 9px; background:Canvas; color:CanvasText; border:1px solid color-mix(in srgb,currentColor 20%,transparent); border-radius:5px; cursor:pointer; white-space:nowrap; }
 .dsh-board-frame { grid-column:1; grid-row:2; position:relative; z-index:1; width:100%; height:100%; border:0; min-width:0; background:Canvas; }
+.dsh-layout-layer { grid-column:1; grid-row:2; z-index:3; align-self:end; justify-self:center; max-width:calc(100% - 28px); padding-bottom:26px; pointer-events:none; }
+.dsh-layout-float { --layout-accent:#7968d8; position:relative; display:flex; align-items:center; gap:12px; max-width:450px; padding:14px 16px; border:1px solid color-mix(in srgb,var(--layout-accent) 22%,transparent); border-radius:18px; background:color-mix(in srgb,var(--dsw-alias-bg-base,Canvas) 93%,transparent); color:var(--dsw-alias-label-primary,CanvasText); box-shadow:0 10px 42px #30205318,0 1px 4px #3020530c; backdrop-filter:blur(18px); overflow:hidden; pointer-events:auto; animation:dsh-layout-appear .28s ease-out; }
+.dsh-layout-glow { position:absolute; width:160px; height:100px; left:-70px; top:-40px; border-radius:50%; background:radial-gradient(ellipse,color-mix(in srgb,var(--layout-accent) 14%,transparent),transparent 70%); pointer-events:none; }
+.dsh-layout-glyph { width:40px; height:40px; flex:none; color:var(--layout-accent); overflow:visible; }
+.dsh-layout-orbit { stroke:currentColor; stroke-opacity:.16; stroke-width:.7; stroke-dasharray:2 6; }
+.dsh-layout-links { stroke:currentColor; stroke-opacity:.4; stroke-width:1; }
+.dsh-layout-tile { fill:color-mix(in srgb,var(--layout-accent) 9%,var(--dsw-alias-bg-base,Canvas)); stroke:currentColor; stroke-opacity:.8; stroke-width:1; }
+.dsh-layout-glyph[data-active] .dsh-layout-orbit { transform-origin:center; animation:dsh-layout-orbit 16s linear infinite; }
+.dsh-layout-glyph[data-active] .dsh-layout-tile { animation:dsh-layout-breathe 2.6s ease-in-out infinite; }
+.dsh-layout-glyph[data-active] .dsh-layout-tile-b { animation-delay:.4s; }
+.dsh-layout-glyph[data-active] .dsh-layout-tile-c { animation-delay:.8s; }
+.dsh-layout-copy { position:relative; display:flex; flex-direction:column; gap:5px; min-width:0; }
+.dsh-layout-copy strong { font-size:13px; font-weight:600; letter-spacing:.04em; }
+.dsh-layout-copy > span { font-size:11px; line-height:1.5; opacity:.65; overflow-wrap:anywhere; }
+.dsh-layout-spark { margin-left:7px; color:var(--layout-accent); font-size:10px; }
+.dsh-layout-float button { flex:none; align-self:center; margin-left:4px; border:0; border-radius:8px; background:transparent; color:inherit; opacity:.6; padding:6px 8px; font:inherit; font-size:11px; cursor:pointer; }
+.dsh-layout-float button:hover { opacity:1; background:color-mix(in srgb,currentColor 6%,transparent); }
+.dsh-layout-float button:focus-visible,.dsh-layout-chat-summary:focus-visible { outline:2px solid var(--layout-accent,#7968d8); outline-offset:3px; }
+.dsh-layout-float[data-state=completed] { --layout-accent:#378476; }
+.dsh-layout-float[data-state=failed] { --layout-accent:#a35a47; }
+.dsh-layout-float[data-state=cancelled] { --layout-accent:#7b7f8c; }
+.dsh-layout-chat-task { display:flex; flex-direction:column; align-items:flex-end; gap:10px; }
+.dsh-layout-chat-summary { display:flex; align-items:center; gap:7px; padding:7px 11px; color:var(--dsw-alias-label-secondary,CanvasText); background:color-mix(in srgb,#7968d8 5%,transparent); border:1px solid color-mix(in srgb,#7968d8 14%,transparent); border-radius:12px; cursor:pointer; font:inherit; font-size:11px; }
+.dsh-layout-chat-summary > span:first-child { color:#7968d8; }
+.dsh-layout-chat-summary small { opacity:.55; font-size:10px; margin-left:7px; }
+.dsh-layout-chat-detail { width:100%; }
+[data-chat-flow-key]:has(> [data-dsh-layout-hidden]) { display:none; }
+@keyframes dsh-layout-orbit { to { transform:rotate(360deg); } }
+@keyframes dsh-layout-breathe { 0%,100% { opacity:.55; transform:translateY(0); } 50% { opacity:1; transform:translateY(-1.5px); } }
+@keyframes dsh-layout-appear { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+@media(prefers-reduced-motion:reduce) { .dsh-layout-float,.dsh-layout-glyph[data-active] .dsh-layout-orbit,.dsh-layout-glyph[data-active] .dsh-layout-tile { animation:none; } }
 .dsh-board-divider { grid-column:2; grid-row:2; position:relative; z-index:2; cursor:col-resize; touch-action:none; background:color-mix(in srgb,currentColor 12%,transparent); }
 .dsh-board-divider:hover { background:color-mix(in srgb,currentColor 30%,transparent); }
 .dsh-board-divider[hidden] { visibility:hidden; display:block; }
@@ -24,3 +55,13 @@
 .dsh-board-settings input { width:18px; height:18px; accent-color:#5876e9; }
 .dsh-board-settings p { margin:8px 0 16px; font-size:14px; }
 .dsh-board-settings [role=alert] { color:#c63a3a; }
+.dsh-board-guide-settings { margin-top:32px; padding-top:20px; border-top:1px solid color-mix(in srgb,currentColor 20%,transparent); }
+.dsh-board-guide-settings h3 { margin:0 0 12px; font-size:18px; }
+.dsh-board-guide-settings .dsh-board-guide-label { margin:12px 0 8px; }
+.dsh-board-guide-settings textarea { display:block; width:100%; min-height:320px; box-sizing:border-box; resize:vertical; padding:12px; border:1px solid color-mix(in srgb,currentColor 30%,transparent); border-radius:6px; background:Canvas; color:CanvasText; font:14px/1.65 ui-monospace,monospace; }
+.dsh-board-guide-path code { overflow-wrap:anywhere; user-select:text; }
+.dsh-board-guide-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px; }
+.dsh-board-guide-actions button { padding:7px 12px; border:1px solid color-mix(in srgb,currentColor 25%,transparent); border-radius:5px; background:Canvas; color:CanvasText; cursor:pointer; }
+.dsh-board-guide-actions button:disabled { opacity:.5; cursor:default; }
+.dsh-board-guide-settings summary { cursor:pointer; }
+.dsh-board-guide-settings pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; font:14px/1.65 ui-monospace,monospace; background:color-mix(in srgb,currentColor 5%,transparent); }

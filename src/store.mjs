@@ -45,7 +45,9 @@ export class BoardStore {
   }
   async persist(bundle, file, fileName, signal) {
     await this.atomic(join(this.directory, 'boards', file), serializeBoard(bundle.file, bundle.blobs), signal);
-    await this.atomic(join(this.directory, 'current.json'), JSON.stringify({ file, fileName }), signal);
+    // The board rename is the commit point. Once it succeeded, finish the
+    // pointer write even if cancellation arrives, then publish the same state.
+    await this.atomic(join(this.directory, 'current.json'), JSON.stringify({ file, fileName }));
   }
   exclusive(action) {
     const next = this.queue.then(() => this.ready).then(action);
@@ -61,7 +63,7 @@ export class BoardStore {
     await this.ready; await this.queue;
     return { revision: this.token, board: this.bundle.file.board, nodes: this.bundle.file.nodes,
       edges: this.bundle.file.edges, collections: this.bundle.file.collections ?? [],
-      operations: 'Use existing Draft Board ops. addNode carries node and after=node; updateNodeText carries nodeId and after={markdown:string}; updateNodeCaption carries nodeId and after={caption:string|null}; moveNode carries nodeId and after={x:number,y:number}; setNodeAccent carries nodeId and after={accent:string|null}; addEdge carries edge and after=edge; removeNode/removeEdge carry the corresponding ID and after=null. Use before=null. IDs use n_/e_/g_ plus 6–32 letters, digits, underscores or hyphens. A batch includes batchVersion=1.0, boardId, baseContentVersion, actor=agent, label, ops.' };
+      operations: 'Use existing Draft Board ops. addNode carries node and after=node: text nodes use {id,type:"text",markdown:core,caption:optionalNotes,x,y,w}; a whole $...$ or $$...$$ core is rendered as a formula card. Text/formula nodes may set shape="card"|"rectangle"|"diamond"|"pill"; image nodes have no shape. setNodeShape carries nodeId and after={shape:enum|null}; null restores the ordinary card. updateNodeText carries nodeId and after={markdown:string}; updateNodeCaption carries nodeId and after={caption:string|null}; moveNode carries nodeId and after={x:number,y:number}; setNodeAccent carries nodeId and after={accent:string|null}. addEdge carries edge and after=edge, with {id,kind:"parentChild"|"association",from,to,directed,label?}; Edges may also set routing="curve"|"orthogonal" and stroke="solid"|"dashed"|"flowing-dashed". Flowing dashes follow the path from source to target on directed edges; undirected edges stay static. setEdgeStyle carries edgeId and after={routing:enum|null,stroke:enum|null}; provide both, null restores that default. updateEdge edits from/to/directed/label and preserves appearance. Flow visuals support human understanding and decisions, not execution. parentChild must be directed=true, single-parent and acyclic. Reparent existing children with {op:"reparent",nodeId,after:{parentId:string|null}}. addCollection carries collection and after=collection, with {id,name,shape:"rectangle"|"ellipse"|"circle",nodeIds:existingCardIds,x,y}; updateCollection carries collectionId and the complete collection as after; removeCollection carries collectionId and after=null and preserves cards. removeNode/removeEdge carry the corresponding ID and after=null. Use before=null. IDs use n_/e_/g_ plus 6–32 letters, digits, underscores or hyphens. A batch includes batchVersion=1.0, boardId, baseContentVersion, actor=agent, label, ops.' };
   }
   sync(request, signal) {
     return this.exclusive(async () => {
