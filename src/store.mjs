@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { applyBatch, createEmptyBoard, parseBoard, serializeBoard } from '../lib/model.js';
+import { assessReadability } from './quality.mjs';
 
 export class BoardConflict extends Error {
   constructor(message, code = 'E_SYNC_CONFLICT') { super(message); this.code = code; }
@@ -10,10 +11,12 @@ export class BoardConflict extends Error {
 // A single current draft for this local prototype. All mutations are serialized;
 // browser snapshots also carry a process-generation revision, independent of contentVersion.
 export class BoardStore {
-  constructor(directory) {
+  constructor(directory, reviewer = null) {
     this.directory = directory;
     this.generation = randomUUID();
     this.revision = 0;
+    this.reviewer = reviewer;
+    this.measurement = null;
     this.queue = Promise.resolve();
     this.ready = this.initialize();
   }
@@ -45,7 +48,9 @@ export class BoardStore {
   }
   async persist(bundle, file, fileName, signal) {
     await this.atomic(join(this.directory, 'boards', file), serializeBoard(bundle.file, bundle.blobs), signal);
-    await this.atomic(join(this.directory, 'current.json'), JSON.stringify({ file, fileName }), signal);
+    // The board rename is the commit point. Once it succeeded, finish the
+    // pointer write even if cancellation arrives, then publish the same state.
+    await this.atomic(join(this.directory, 'current.json'), JSON.stringify({ file, fileName }));
   }
   exclusive(action) {
     const next = this.queue.then(() => this.ready).then(action);
@@ -60,8 +65,9 @@ export class BoardStore {
   async read() {
     await this.ready; await this.queue;
     return { revision: this.token, board: this.bundle.file.board, nodes: this.bundle.file.nodes,
+      layout: this.measurement?.revision === this.token ? this.measurement : {status:'unmeasured'},
       edges: this.bundle.file.edges, collections: this.bundle.file.collections ?? [],
-      operations: 'Use existing Draft Board ops. addNode carries node and after=node; updateNodeText carries nodeId and after={markdown:string}; updateNodeCaption carries nodeId and after={caption:string|null}; moveNode carries nodeId and after={x:number,y:number}; setNodeAccent carries nodeId and after={accent:string|null}; addEdge carries edge and after=edge; removeNode/removeEdge carry the corresponding ID and after=null. Use before=null. IDs use n_/e_/g_ plus 6–32 letters, digits, underscores or hyphens. A batch includes batchVersion=1.0, boardId, baseContentVersion, actor=agent, label, ops.' };
+      operations: 'Use existing Draft Board ops. addNode carries node and after=node: text nodes use {id,type:"text",markdown:core,caption:optionalNotes,x,y,w}; a whole $...$ or $$...$$ core is rendered as a formula card. Text/formula nodes may set shape="card"|"rectangle"|"diamond"|"pill"; image nodes have no shape. setNodeShape carries nodeId and after={shape:enum|null}; null restores the ordinary card. updateNodeText carries nodeId and after={markdown:string}; updateNodeCaption carries nodeId and after={caption:string|null}; moveNode carries nodeId and after={x:number,y:number}; setNodeAccent carries nodeId and after={accent:string|null}. addEdge carries edge and after=edge, with {id,kind:"parentChild"|"association",from,to,directed,label?}; Edges may also set routing="curve"|"orthogonal" and stroke="solid"|"dashed"|"flowing-dashed". Flowing dashes follow the path from source to target on directed edges; undirected edges stay static. setEdgeStyle carries edgeId and after={routing:enum|null,stroke:enum|null}; provide both, null restores that default. updateEdge edits from/to/directed/label and preserves appearance. Flow visuals support human understanding and decisions, not execution. parentChild must be directed=true, single-parent and acyclic. Reparent existing children with {op:"reparent",nodeId,after:{parentId:string|null}}. addCollection carries collection and after=collection, with {id,name,shape:"rectangle"|"ellipse"|"circle",nodeIds:existingCardIds,x,y}; updateCollection carries collectionId and the complete collection as after; removeCollection carries collectionId and after=null and preserves cards. removeNode/removeEdge carry the corresponding ID and after=null. Use before=null. IDs use n_/e_/g_ plus 6–32 letters, digits, underscores or hyphens. A batch includes batchVersion=1.0, boardId, baseContentVersion, actor=agent, label, ops.' };
   }
   sync(request, signal) {
     return this.exclusive(async () => {
@@ -76,15 +82,44 @@ export class BoardStore {
       return { revision: this.token };
     });
   }
-  apply(batch, signal) {
-    return this.exclusive(async () => {
+  async apply(batch, signal) {
+    // Keep the enable generation alive through the disk commit, even after
+    // the render job has resolved and been removed from the review queue.
+    const qualitySignal = this.reviewer?.signal;
+    const writeSignal = qualitySignal ? AbortSignal.any([qualitySignal, ...(signal ? [signal] : [])]) : signal;
+    const staged = await this.exclusive(async () => {
       signal?.throwIfAborted();
       const outcome = applyBatch(this.bundle.file, batch);
-      if (!outcome.result.ok) return outcome.result;
-      const next = { ...this.bundle, file: outcome.file };
-      await this.persist(next, this.file, this.fileName, signal);
+      return { outcome, before:this.bundle.file, blobs:this.bundle.blobs, revision:this.token };
+    });
+    const {outcome,before,blobs,revision} = staged;
+    if (!outcome.result.ok) return outcome.result;
+    let assessment,measured;
+    if (this.reviewer) {
+      try {
+        measured = await this.reviewer.inspect(before,outcome.file,blobs,writeSignal);
+        signal?.throwIfAborted();
+        assessment = assessReadability(before,outcome.file,measured);
+      } catch(cause) {
+        signal?.throwIfAborted();
+        return {ok:false,error:{code:cause.code ?? 'E_QUALITY_UNAVAILABLE',message:cause.message}};
+      }
+    }
+    return this.exclusive(async () => {
+      signal?.throwIfAborted();
+      if (qualitySignal?.aborted) return {ok:false,error:{code:'E_QUALITY_UNAVAILABLE',message:'白板在检查后已停用，旧候选未写入；请重新读取。'}};
+      if (this.token !== revision) return {ok:false,error:{code:'E_VERSION_CONFLICT',message:'布局检查期间白板已变化，候选未写入；请重新读取。'}};
+      if (assessment?.conflicts.length) {
+        this.measurement={status:'measured',revision,geometry:measured.before.geometry,labels:measured.before.labels};
+        return {ok:false,error:{code:'E_EDIT_GEOMETRY',message:'候选未写入；请按实际外框修正卡片、集合或连线，再提交完整批次。'},
+          conflicts:assessment.conflicts.slice(0,80),totalConflicts:assessment.conflicts.length,geometry:assessment.geometry,labels:assessment.labels,collections:assessment.collections,
+          baseContentVersion:before.board.contentVersion};
+      }
+      const next = { file:outcome.file, blobs };
+      await this.persist(next, this.file, this.fileName, writeSignal);
       this.bundle = next; this.revision++;
-      return { ...outcome.result, label: batch.label, revision: this.token };
+      if (assessment) this.measurement={status:'measured',revision:this.token,geometry:assessment.geometry,labels:assessment.labels,collections:assessment.collections};
+      return { ...outcome.result, label: batch.label, revision: this.token, ...(assessment ? {layout:{status:'checked',remainingExistingConflicts:assessment.all.length}} : {}) };
     });
   }
 }
