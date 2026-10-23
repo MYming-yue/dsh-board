@@ -6,6 +6,7 @@ import { BoardStore } from './store.mjs';
 import { BoardContext, BOARD_INSTRUCTIONS } from './context.mjs';
 import { LayoutTasks, LAYOUT_INSTRUCTIONS } from './layout.mjs';
 import { BoardGuide } from './guide.mjs';
+import { QualityReview } from './quality.mjs';
 
 export const name = 'dsh-board';
 export const inject = ['connection', 'tools', 'systemPrompt'];
@@ -18,7 +19,8 @@ const output = { schema: { type: 'object', additionalProperties: true },
 
 export async function apply(ctx, config = {}) {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh');
-  const store = new BoardStore(config.dataDir ?? join(home, 'dsh-board'));
+  const quality = new QualityReview();
+  const store = new BoardStore(config.dataDir ?? join(home, 'dsh-board'), quality);
   await store.ready;
   const boardContext = new BoardContext(join(store.directory, 'plugin-state.json'));
   await boardContext.ready;
@@ -31,6 +33,11 @@ export async function apply(ctx, config = {}) {
     ? '本轮仅允许白板布局读取与坐标提交；内容、结构及其他工具已暂停。' : undefined));
   const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const register = route => ctx.effect(() => ctx.connection.fetch.register(route));
+  register({path:'/api/dsh-board/quality',methods:['GET','POST'],requestBody:'buffered',fetch:async request=>{
+    try { return json(request.method==='POST' ? quality.report(await request.json()) : {job:quality.pending()}); }
+    catch(cause){return json({error:{code:'E_QUALITY_MEASUREMENT',message:cause.message}},400);}
+  }});
+  ctx.effect(()=>()=>quality.setEnabled(false));
   const options = () => ({ ...boardContext.options, version, draftName: store.bundle.file.board.name, fileName: store.fileName });
   register({ path: '/api/dsh-board/guide', methods: ['GET','POST'], requestBody: 'buffered',
     fetch: async request => {
@@ -114,6 +121,7 @@ export async function apply(ctx, config = {}) {
       order:ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_SUFFIX')+101,text:guide.text});
   }
   function reconcile() {
+    quality.setEnabled(boardContext.options.enabled);
     for (const release of releases) release();
     releases = [];
     updateGuideSection();
@@ -129,7 +137,7 @@ export async function apply(ctx, config = {}) {
     isConcurrencySafe: () => true,
     execute: async () => { requireEnabled(); await guide.read(); return jsonSafe(await store.read()); } }));
     releases.push(ctx.tools.register({ name: 'draft_board_apply',
-    description: 'Actively maintain the current shared whiteboard with one validated, undoable Draft Board batch. Read first, then send batchVersion=1.0, boardId, baseContentVersion, actor=agent, label and ops. Identity/version conflicts require reading again.',
+    description: 'Maintain the shared whiteboard with one atomic undoable batch. Read first; send batchVersion=1.0, boardId, baseContentVersion, actor=agent, label and ops. Before writing, the browser renders a read-only candidate and checks actual card/caption bounds, collection separation, paths and labels. E_EDIT_GEOMETRY leaves the board unchanged and returns candidate dimensions and conflicts: correct the complete batch, keeping the original baseContentVersion. Version conflicts require reading again; unavailable measurements never bypass checks.',
     parameters: { type: 'object', properties: { batch: { type: 'string', description: 'JSON-encoded AgentBatch. Existing Draft Board operations only.' } }, required: ['batch'], additionalProperties: false }, output,
     execute: async (args, exec) => { requireEnabled(); return jsonSafe(await store.apply(JSON.parse(args.batch), exec.signal)); } }));
     releases.push(ctx.tools.register({name:'draft_board_layout_read',description:'Read the active layout task: existing content, relationships, allowed card IDs, actual visible card sizes and viewport. Only available for a layout task admitted through the whiteboard button.',

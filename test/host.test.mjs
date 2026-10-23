@@ -66,7 +66,12 @@ test('native layout claim narrows tools for exactly one agent turn and restores 
   await apply(ctx,{dataDir:directory});
   const initial=await tools.get('draft_board_read').execute();
   const node={id:'n_layout01',type:'text',markdown:'前提',x:0,y:0,w:100,h:70};
-  await tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:initial.board.id,baseContentVersion:initial.board.contentVersion,actor:'agent',label:'示例',ops:[{op:'addNode',node,before:null,after:node}]})},{signal:new AbortController().signal});
+  const seeding=tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:initial.board.id,baseContentVersion:initial.board.contentVersion,actor:'agent',label:'示例',ops:[{op:'addNode',node,before:null,after:node}]})},{signal:new AbortController().signal});
+  const qualityRoute=routes.get('/api/dsh-board/quality');let pendingJob;
+  for(let i=0;i<100 && !pendingJob;i++) {pendingJob=(await (await qualityRoute.fetch(new Request('http://localhost/api/dsh-board/quality'))).json()).job;if(!pendingJob)await new Promise(resolve=>setTimeout(resolve,5));}
+  assert.ok(pendingJob,'ordinary editing must request a render before committing');
+  await qualityRoute.fetch(new Request('http://localhost/api/dsh-board/quality',{method:'POST',body:JSON.stringify({id:pendingJob.id,before:{geometry:{},labels:{}},after:{geometry:{n_layout01:{w:100,h:70}},labels:{}}})}));
+  assert.equal((await seeding).ok,true);
   const read=await tools.get('draft_board_read').execute();
   const input={sessionId:'session1',requestId:'request1',boardId:read.board.id,baseContentVersion:read.board.contentVersion,revision:read.revision,geometry:{n_layout01:{w:100,h:70}},viewport:{width:1200,height:800},nodeIds:['n_layout01']};
   const response=await routes.get('/api/dsh-board/layout').fetch(new Request('http://localhost/api/dsh-board/layout',{method:'POST',body:JSON.stringify(input)}));

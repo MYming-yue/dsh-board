@@ -79,15 +79,56 @@ try {
     });
   });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await page.goto(origin + '/api/dsh-board/ui/index.html?dshBoard=1', { waitUntil: 'networkidle' });
+  await page.goto(origin + '/api/dsh-board/ui/index.html?dshBoard=1', { waitUntil: 'domcontentloaded' });
   await page.locator('.toolbar').waitFor();
-  assert.equal(await page.locator('.app-version').textContent(), 'v0.2.3');
+  assert.equal(await page.locator('.app-version').textContent(), 'v0.2.4-dev.1');
   const initial = await tools.get('draft_board_read').execute();
   const node = { id: 'n_package001', type: 'text', markdown: '独立安装包验证', x: 180, y: 200, w: 240 };
   const changed = await tools.get('draft_board_apply').execute({ batch: JSON.stringify({ batchVersion: '1.0', boardId: initial.board.id, baseContentVersion: initial.board.contentVersion, actor: 'agent', label: '安装包浏览器验证', ops: [{ op: 'addNode', node, before: null, after: node }] }) }, { signal: new AbortController().signal });
   assert.equal(changed.ok, true);
   await page.locator(`[data-node-id="${node.id}"]`).waitFor();
   await page.waitForFunction(()=>window.__state.saveState==='saved');
+  // Ordinary edits render isolated candidates before publishing any history or visible cards.
+  const qualityBefore=await tools.get('draft_board_read').execute();
+  assert.equal(qualityBefore.layout.status,'measured');
+  const qualitySnapshot=await (await routes.get('/api/dsh-board/state').fetch(new Request(origin+'/api/dsh-board/state'))).json();
+  const qualityPointer=JSON.parse(await readFile(join(directory,'data/current.json'),'utf8'));
+  const qualityDiskPath=join(directory,'data/boards',qualityPointer.file),qualityDiskBytes=await readFile(qualityDiskPath);
+  const submitQuality=ops=>tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:qualityBefore.board.id,baseContentVersion:qualityBefore.board.contentVersion,actor:'agent',label:'普通编辑布局预检',ops})},{signal:new AbortController().signal});
+  const addQuality=n=>({op:'addNode',node:n,before:null,after:n});
+  const overlapping={id:'n_quality001',type:'text',markdown:'重叠候选',x:node.x+20,y:node.y,w:100};
+  const refusedPromise=submitQuality([addQuality(overlapping)]);
+  const qualityRoute=routes.get('/api/dsh-board/quality');let renderJob;
+  for(let i=0;i<100 && !renderJob;i++){renderJob=(await (await qualityRoute.fetch(new Request(origin+'/api/dsh-board/quality'))).json()).job;if(!renderJob)await new Promise(r=>setTimeout(r,10));}
+  assert.ok(renderJob,'AI edits require a real render job');
+  assert.equal(await page.locator(`[data-node-id="${overlapping.id}"]`).count(),0,'candidate never enters the user canvas');
+  const refused=await refusedPromise;
+  assert.equal(refused.error.code,'E_EDIT_GEOMETRY');assert.ok(refused.conflicts.some(c=>c.kind==='card'));
+  assert.equal((await tools.get('draft_board_read').execute()).revision,qualityBefore.revision);
+  const qualityAfter=await tools.get('draft_board_read').execute();
+  for(const field of ['board','nodes','edges','collections','revision'])assert.deepEqual(qualityAfter[field],qualityBefore[field]);
+  assert.deepEqual(await readFile(qualityDiskPath),qualityDiskBytes,'rejection preserves exact disk bytes and history, independently of ZIP response timestamps');
+  assert.equal((await (await routes.get('/api/dsh-board/state').fetch(new Request(origin+'/api/dsh-board/state'))).json()).revision,qualitySnapshot.revision);
+  const longCaption=await submitQuality([{op:'updateNodeCaption',nodeId:node.id,before:null,after:{caption:'长备注必须按全文占地检查。\n'.repeat(35)}},addQuality({...overlapping,x:node.x,y:node.y+450})]);
+  assert.equal(longCaption.error.code,'E_EDIT_GEOMETRY');assert.ok(longCaption.geometry[node.id].h>450,'selected/full caption measured rather than saved h or clamped notes');
+  const measuredWidth=qualityBefore.layout.geometry[node.id].w;
+  const neighbor={...overlapping,x:node.x+measuredWidth+30,y:node.y};
+  const groups=[{id:'g_quality001',name:'甲区',shape:'rectangle',nodeIds:[node.id],x:0,y:0},{id:'g_quality002',name:'乙区',shape:'rectangle',nodeIds:[neighbor.id],x:0,y:0}];
+  const groupOps=groups.map(c=>({op:'addCollection',collection:c,before:null,after:c}));
+  const groupRefused=await submitQuality([addQuality(neighbor),...groupOps]);
+  assert.equal(groupRefused.error.code,'E_EDIT_GEOMETRY');assert.ok(groupRefused.conflicts.some(c=>c.kind==='collection-overlap'));
+  const crossNodes=[[1400,0],[2200,600],[2200,0],[1400,600]].map(([x,y],i)=>({id:`n_crosspkg0${i}`,type:'text',markdown:`节点${i}`,x,y,w:100}));
+  const crossEdges=[[0,1],[2,3]].map(([a,b],i)=>({id:`e_crosspkg0${i}`,kind:'association',from:crossNodes[a].id,to:crossNodes[b].id,directed:true,label:'交叉关系'}));
+  const crossRefused=await submitQuality([...crossNodes.map(addQuality),...crossEdges.map(e=>({op:'addEdge',edge:e,before:null,after:e}))]);
+  assert.equal(crossRefused.error.code,'E_EDIT_GEOMETRY');assert.ok(crossRefused.conflicts.some(c=>c.kind==='edge-crossing'));
+  const repaired=await submitQuality([addQuality({...neighbor,x:node.x+measuredWidth+220}),...groupOps,
+    addQuality({id:'n_qualitymath',type:'text',markdown:'$$\\frac{a}{b}=c$$',caption:'公式与备注使用真实 KaTeX 外框。',shape:'pill',x:1400,y:1000,w:100})]);
+  assert.equal(repaired.ok,true);assert.equal(repaired.layout.status,'checked');
+  await page.waitForFunction(()=>window.__state.file.nodes.length===3&&window.__state.saveState==='saved');
+  await page.screenshot({path:join(artifacts,'package-quality-checked.png')});
+  await page.getByRole('button',{name:'撤销最新一轮',exact:true}).click();
+  await page.waitForFunction(()=>window.__state.file.nodes.length===1&&window.__state.file.collections.length===0&&window.__state.saveState==='saved');
+  console.log('QUALITY PASS: isolated full-caption/shape/formula measurement; card, collection and crossing-edge refusal; exact no-write failure; corrected single-batch undo.');
   // Native AI tools and the installed iframe share the same reversible appearance model.
   const appearanceCurrent=await tools.get('draft_board_read').execute();
   const finish={id:'n_flowpackage',type:'text',markdown:'由人确认',caption:'合成备注保留',shape:'pill',x:640,y:460,w:200};
@@ -110,7 +151,7 @@ try {
   assert.equal(await flowingPath.evaluate(el=>getComputedStyle(el).strokeDasharray),'6px, 4px');
   await page.emulateMedia({reducedMotion:'no-preference'});
   await page.screenshot({path:join(artifacts,'package-flow-appearance.png')});
-  await page.reload({waitUntil:'networkidle'});await page.locator('.toolbar').waitFor();
+  await page.reload({waitUntil:'domcontentloaded'});await page.locator('.toolbar').waitFor();
   await page.locator(`[data-node-id="${node.id}"][data-node-shape="diamond"]`).waitFor();
   await page.waitForFunction(()=>document.querySelector('.edge-flow-active')?.getAnimations().length===1);
   await page.getByRole('button',{name:'撤销',exact:true}).click();
@@ -132,7 +173,7 @@ try {
   await page.waitForFunction(()=>window.__state.file.nodes[0]?.x===180&&window.__state.saveState==='saved');
   assert.equal((await tools.get('draft_board_read').execute()).nodes[0].y,200,'one undo restores the whole layout');
   events.get('agent/status')({agent,status:'idle'});
-  await page.reload({waitUntil:'networkidle'});await page.locator('.toolbar').waitFor();
+  await page.reload({waitUntil:'domcontentloaded'});await page.locator('.toolbar').waitFor();
   // A fresh external content batch remains independently undoable after the layout round.
   const current=await tools.get('draft_board_read').execute();
   assert.equal((await tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:current.board.id,baseContentVersion:current.board.contentVersion,actor:'agent',label:'内容更新独立于布局',ops:[{op:'updateNodeCaption',nodeId:node.id,before:null,after:{caption:'合成回归内容'}}]})},{signal:new AbortController().signal})).ok,true);
@@ -140,13 +181,13 @@ try {
   await page.getByRole('button', { name: '撤销最新一轮', exact: true }).click();
   await page.waitForFunction(() => !window.__state.file.nodes[0]?.caption && window.__state.saveState === 'saved');
   assert.equal((await tools.get('draft_board_read').execute()).nodes.length, 1);
-  await page.reload({ waitUntil: 'networkidle' }); await page.locator('.toolbar').waitFor();
+  await page.reload({ waitUntil: 'domcontentloaded' }); await page.locator('.toolbar').waitFor();
   assert.equal(await page.evaluate(() => window.__state.file.board.id), initial.board.id);
   assert.deepEqual(errors, []);
   await page.screenshot({ path: join(artifacts, 'package-smoke.png') });
   const stablePrompt=sections.get('dsh-board'),stableTools=tools.get('draft_board_apply'),beforeGuide=await tools.get('draft_board_read').execute();
   const guidePath=join(directory,'data/board-guide.md'),standard=await readFile(join(installed,'docs/board-guide.md'),'utf8');
-  await page.goto(origin+'/_test/settings',{waitUntil:'networkidle'});
+  await page.goto(origin+'/_test/settings',{waitUntil:'domcontentloaded'});
   const editor=page.getByRole('textbox',{name:'白板使用方法提示词',exact:true});
   await page.waitForFunction(()=>document.getElementById('dsh-board-guide-text')?.value.startsWith('# DSH-board'));
   assert.equal(await editor.inputValue(),sections.get('dsh-board-guide').text);
@@ -174,7 +215,7 @@ try {
   assert.equal(sections.get('dsh-board'),stablePrompt);assert.equal(tools.get('draft_board_apply'),stableTools);
   assert.equal((await tools.get('draft_board_read').execute()).revision,beforeGuide.revision,'guide saves do not change the draft');
   await page.screenshot({path:join(artifacts,'package-guide-settings.png'),fullPage:true});
-  await page.goto(origin+'/_test/panel',{waitUntil:'networkidle'});
+  await page.goto(origin+'/_test/panel',{waitUntil:'domcontentloaded'});
   const frame=page.frameLocator('iframe.dsh-board-frame');
   await frame.locator('.toolbar').waitFor();
   await frame.getByRole('button',{name:'AI 布局整理',exact:true}).click();
