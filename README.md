@@ -126,7 +126,7 @@ npm run check
 
 `npm run check` 执行上游类型检查、界面与模型构建、插件测试，以及真实浏览器的安装包检查。安装包检查从 tgz 解压运行，验证持久化、画布接收批次与整轮撤销，不调用模型 API。`DSH_BOARD_BROWSER=chromium` 可指定 Playwright Chromium；默认依次尝试系统 Chrome、Edge、Chromium。Linux 可用 `install --with-deps chromium`。
 
-Chromium 通过 `channel: 'chromium'` 使用完整浏览器的无界面模式，与 Chrome／Edge 保持一致，用于文件句柄与 IndexedDB 的真实浏览器回归；模式差异见 [Playwright 说明](https://playwright.dev/docs/browsers#chromium-new-headless-mode)。
+文件句柄／IndexedDB 回归使用 Playwright 1.64.1 的 Chromium 156，或当前 Chrome／Edge；更新 Playwright 后需重新安装对应浏览器。旧 Chromium 153／154 的句柄序列化存在已确认的浏览器崩溃，见 [Chromium #569219196](https://issues.chromium.org/issues/569219196)。
 
 发布包：
 
