@@ -82,7 +82,9 @@ try {
   const candidates = process.env.DSH_BOARD_BROWSER ? [process.env.DSH_BOARD_BROWSER] : ['chrome', 'msedge', 'chromium'];
   const failures = [];
   for (const channel of candidates) {
-    try { browser = await chromium.launch({ headless: true, ...channel === 'chromium' ? {} : { channel } }); console.log(`Package browser: ${channel} ${browser.version()}`); break; }
+    // Use full Chromium/new headless for file-handle persistence, as with Chrome/Edge.
+    // https://playwright.dev/docs/browsers#chromium-new-headless-mode
+    try { browser = await chromium.launch({ headless: true, channel }); console.log(`Package browser: ${channel} ${browser.version()}`); break; }
     catch (error) { failures.push(`${channel}: ${error.message.split('\n')[0]}`); }
   }
   if (!browser) throw new Error('No test browser. ' + failures.join('; '));
