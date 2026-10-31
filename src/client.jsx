@@ -4,6 +4,8 @@ import { associatedSession } from './submission.mjs';
 import { layoutSession, LAYOUT_REQUEST } from './layout-submission.mjs';
 import { GuideSettings } from './guide-settings.jsx';
 import { LayoutFeedback, installLayoutPresentation } from './layout-feedback.jsx';
+import { createPermissionClient } from './permission-client.mjs';
+import { PermissionControl } from './permission-control.jsx';
 import styles from './client.css';
 
 export const inject = ['slots', 'conversation', 'sessions', 'uiConversation'];
@@ -22,6 +24,7 @@ export function apply(ctx) {
     if (!response.ok) throw Object.assign(new Error(result.error?.message ?? 'DSH-board 请求失败'), {code:result.error?.code});
     return result;
   }
+  const permissionClient = createPermissionClient(api);
   let disposed = false;
   let timer;
   async function refreshOptions() {
@@ -50,10 +53,13 @@ export function apply(ctx) {
   async function sendWithReferences(session, text, ...args) {
     if (!options.enabled) return originalSend.call(this, session, text, ...args);
     const selection = bridge.selection;
+    const permission = await permissionClient.snapshot(session.sessionId);
     await flush();
     const bound = associatedSession(session, options.associateSelection ? selection : null, {
-      stage: (sessionId, requestId, selection, signal) => api('association', { sessionId, requestId, selection }, 'POST', signal),
+      stage: (sessionId, requestId, selection, signal) => api('association', { sessionId, requestId, selection,
+        permission:{version:1,mode:permission.mode},permissionRevision:permission.revision }, 'POST', signal),
       discard: (sessionId, requestId) => api('association', { sessionId, requestId }, 'DELETE'),
+      accepted: (sessionId, requestId) => permissionClient.accepted(sessionId, requestId),
     });
     return originalSend.call(this, bound, text, ...args);
   }
@@ -177,6 +183,7 @@ export function apply(ctx) {
             const sessionId=ctx.sessions.list.getSnapshot().current;
             const binding=sessionId && ctx.sessions.binding(sessionId);
             if(!binding) throw new Error('请先新建或选择一个 DSH 对话，再整理布局。');
+            if((await permissionClient.snapshot(sessionId)).mode !== 'auto') throw new Error('当前聊天处于只聊状态，请先切换为默认放权，再整理布局。');
             const bound=layoutSession(binding.session,event.data.snapshot,{
               stage:async(snapshot,signal)=>{stagedTask=await api('layout',snapshot,'POST',signal);return stagedTask;},
               cancel:async taskId=>{stagedTask=await api('layout?id='+encodeURIComponent(taskId),null,'DELETE');return stagedTask;},
@@ -246,5 +253,10 @@ export function apply(ctx) {
     </section>;
   }
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-board' }, BoardPanel));
+  function ComposerPermission({sessionId}) {
+    const preferences = useOptions();
+    return <PermissionControl sessionId={sessionId} client={permissionClient} enabled={preferences.enabled} />;
+  }
+  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({ name: 'conversation.input.right', id: 'dsh-board-permissions', order: 50 }, ComposerPermission));
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'dsh-board', order: 80, label: 'DSH-board 白板' }, BoardSettings));
 }
