@@ -8,6 +8,7 @@ export function associatedSession(session, selection, transport) {
         try {
           const result = await target.prompt(content, mode, signal, requestId);
           if (!result.ok) await transport.discard(target.sessionId, requestId).catch(() => {});
+          else await transport.accepted?.(target.sessionId, requestId);
           return result;
         } catch (error) {
           // A lost response may still be admitted by the host; keep its metadata

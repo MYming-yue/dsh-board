@@ -37,7 +37,7 @@ test('host uses fixed prompt tail and runtime context; management disables tools
   await writeFile(initialGuide.path,'父子卡表达层级；集合表达并列。','utf8');
   const externalGuide=await guideRead();assert.equal(sections.get('dsh-board-guide').text,externalGuide.text);
   assert.equal(contexts.get('dsh-board').order, 1_000_000);
-  await post('association', { sessionId: 'session1', requestId: 'request1', selection: { boardId: before.board.id, cards: [{ id: 'n_card001', title: 'A' }] } });
+  await post('association', { sessionId: 'session1', requestId: 'request1', permission:{version:1,mode:'auto'},permissionRevision:0, selection: { boardId: before.board.id, cards: [{ id: 'n_card001', title: 'A' }] } });
   events.get('agent/inbox/claimed')({ agent: { id: 'session1' }, message: { source: { kind: 'user', rpcId: 'request1' } } });
   assert.ok(contexts.get('dsh-board').text({ agent: { id: 'session1' } }).includes('n_card001'));
   assert.equal((await post('options', { associateSelection: false })).status, 200);
@@ -64,9 +64,11 @@ test('native layout claim narrows tools for exactly one agent turn and restores 
     systemPrompt:{section:()=>()=>{},context:value=>{contexts.set(value.name,value);return ()=>contexts.delete(value.name);},getSectionOrder:()=>10200}};
   t.after(async()=>{for(const release of releases.toReversed())release?.();assert.equal(dirname(directory),tmpdir());assert.ok(basename(directory).startsWith('dsh-board-host-'));await rm(directory,{recursive:true,force:true});});
   await apply(ctx,{dataDir:directory});
+  await routes.get('/api/dsh-board/association').fetch(new Request('http://localhost/api/dsh-board/association',{method:'POST',body:JSON.stringify({sessionId:'seed-session',requestId:'seed-request',permission:{version:1,mode:'auto'},permissionRevision:0})}));
+  events.get('agent/inbox/claimed')({agent:{id:'seed-session'},message:{source:{kind:'user',rpcId:'seed-request'}},turn:1});
   const initial=await tools.get('draft_board_read').execute();
   const node={id:'n_layout01',type:'text',markdown:'前提',x:0,y:0,w:100,h:70};
-  const seeding=tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:initial.board.id,baseContentVersion:initial.board.contentVersion,actor:'agent',label:'示例',ops:[{op:'addNode',node,before:null,after:node}]})},{signal:new AbortController().signal});
+  const seeding=tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:initial.board.id,baseContentVersion:initial.board.contentVersion,actor:'agent',label:'示例',ops:[{op:'addNode',node,before:null,after:node}]})},{agent:{id:'seed-session'},signal:new AbortController().signal});
   const qualityRoute=routes.get('/api/dsh-board/quality');let pendingJob;
   for(let i=0;i<100 && !pendingJob;i++) {pendingJob=(await (await qualityRoute.fetch(new Request('http://localhost/api/dsh-board/quality'))).json()).job;if(!pendingJob)await new Promise(resolve=>setTimeout(resolve,5));}
   assert.ok(pendingJob,'ordinary editing must request a render before committing');
@@ -83,7 +85,7 @@ test('native layout claim narrows tools for exactly one agent turn and restores 
   assert.ok(restricted);assert.match(contexts.get('dsh-board').text({agent}),/视觉风格/);
   assert.ok(guard({agent,name:'draft_board_apply'}));assert.ok(guard({agent,name:'pwsh'}));
   assert.equal(guard({agent,name:'draft_board_layout_apply'}),undefined);
-  assert.equal(guard({agent:{id:'session2'},name:'draft_board_apply'}),undefined);
+  assert.match(guard({agent:{id:'session2'},name:'draft_board_apply'}),/E_BOARD_READ_ONLY/,'unknown admissions cannot grant writing');
   assert.equal((await tools.get('draft_board_layout_read').execute({},exec)).taskId,task.id);
   assert.equal((await tools.get('draft_board_layout_apply').execute({taskId:task.id,boardId:read.board.id,baseContentVersion:read.board.contentVersion,positions:[{nodeId:node.id,x:120,y:60}]},exec)).ok,true);
   assert.ok(guard({agent,name:'draft_board_apply'}),'completed candidate still restricts the rest of this turn');

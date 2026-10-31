@@ -30,6 +30,21 @@ try {
   const installed = join(directory, 'package');
   const lock = JSON.parse(await readFile(join(installed, 'lib/upstream.json'), 'utf8'));
   assert.deepEqual(lock, JSON.parse(await readFile(join(root, 'upstream.json'), 'utf8')));
+  const packagedModel=await import(pathToFileURL(join(installed,'lib/model.js')).href);
+  const branchNodes=[[450,59,357,128],[6,342,329,129],[396,342,465,129],[923,353,405,108],[1412,342,330,129]].map(([x,y,w,h],i)=>({id:`n_packfan${i}`,type:'text',markdown:`Card ${i}`,x,y,w,h}));
+  const branchEdges=branchNodes.slice(1).map((n,i)=>({id:`e_packfan${i}`,kind:'parentChild',from:branchNodes[0].id,to:n.id,directed:true}));
+  const branchBoard={...packagedModel.createEmptyBoard('合成四分支'),nodes:branchNodes,edges:branchEdges};
+  assert.deepEqual(packagedModel.readabilityConflicts(branchBoard,{}),[],'installed model avoids the former sibling crossing');
+  for(const [id,g] of packagedModel.edgeGeometries(branchEdges,branchNodes,{})){
+    const edge=branchEdges.find(e=>e.id===id),target=branchNodes.find(n=>n.id===edge.to),v={x:g.arrow.tip.x-g.arrow.base.x,y:g.arrow.tip.y-g.arrow.base.y};
+    assert.equal((g.d.match(/ C /g)||[]).length,1,"packaged clear curves do not add terminal patches");
+    assert.ok(Math.abs(v.x*(target.y+target.h/2-g.toPt.y)-v.y*(target.x+target.w/2-g.toPt.x))<.001,"packaged arrows face the actual card centre");
+    assert.ok(g.points.slice(1).every((p,i)=>p.y>=g.points[i].y-1e-8),'packaged curves have no upward hooks');
+    assert.deepEqual(g.arrow.tip,g.toPt,'arrow tip retains the original endpoint');
+    assert.ok(Math.abs(Math.hypot(g.arrow.tip.x-g.arrow.base.x,g.arrow.tip.y-g.arrow.base.y)-10)<.001,'packaged arrow length is fixed');
+    assert.ok(Math.abs(Math.hypot(g.arrow.left.x-g.arrow.right.x,g.arrow.left.y-g.arrow.right.y)-7)<.001,'packaged arrow width is fixed');
+    assert.notEqual(g.strokeD,g.d,'filled arrow trims only an original curve prefix');
+  }
   let module;
   new Script(await readFile(join(installed, 'lib/client.js'), 'utf8')).runInNewContext({ window: { __ModuleLoader__: { load: value => { module = value; } } } });
   assert.equal(module.id, 'dsh-board'); assert.equal(typeof module.factory, 'function');
@@ -41,6 +56,9 @@ try {
     tools: { register: definition => { tools.set(definition.name, definition); return () => tools.delete(definition.name); }, guard: () => () => {} },
     systemPrompt: { section: definition => { sections.set(definition.name,definition);return ()=>sections.delete(definition.name); }, context: () => () => {}, getSectionOrder: () => 10200 },
   }, { dataDir: join(directory, 'data') });
+  const editorAgent={id:'package-editor'};
+  await routes.get('/api/dsh-board/association').fetch(new Request('http://localhost/api/dsh-board/association',{method:'POST',body:JSON.stringify({sessionId:editorAgent.id,requestId:'editor-admission',permission:{version:1,mode:'auto'},permissionRevision:0})}));
+  events.get('agent/inbox/claimed')({agent:editorAgent,message:{source:{kind:'user',rpcId:'editor-admission'}},turn:1});
   const harness=await build({stdin:{contents:await readFile(join(root,'scripts/guide-settings-harness.jsx'),'utf8'),resolveDir:join(root,'.upstream/draft-board'),loader:'jsx'},bundle:true,write:false,platform:'browser',format:'iife',jsx:'automatic',target:'es2022'});
   routes.set('/_test/settings',{methods:['GET'],fetch:async()=>new Response('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>DSH-board 设置回归</title></head><body><main id="settings"></main><script src="/_test/harness.js"></script><script src="/_test/client.js"></script></body></html>',{headers:{'Content-Type':'text/html; charset=utf-8'}})});
   routes.set('/_test/harness.js',{methods:['GET'],fetch:async()=>new Response(harness.outputFiles[0].text,{headers:{'Content-Type':'text/javascript'}})});
@@ -81,10 +99,42 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/api/dsh-board/ui/index.html?dshBoard=1', { waitUntil: 'domcontentloaded' });
   await page.locator('.toolbar').waitFor();
-  assert.equal(await page.locator('.app-version').textContent(), 'v0.2.4-dev.1');
+  assert.equal(await page.locator('.app-version').textContent(), 'v0.2.4-dev.6');
+  const boardName=page.getByRole('textbox',{name:'白板名称',exact:true}),oldTitle=await boardName.inputValue();
+  await boardName.fill('');assert.equal(await boardName.inputValue(),'');assert.equal(await boardName.getAttribute('placeholder'),oldTitle);
+  await boardName.press('Tab');assert.equal(await boardName.inputValue(),oldTitle);
+  await boardName.fill('安装包命名测试');await boardName.press('Enter');
+  await page.waitForFunction(()=>window.__state.file.board.name==='安装包命名测试' && window.__state.saveState==='saved');
+  const titleSnapshot=await (await routes.get('/api/dsh-board/state').fetch(new Request(origin+'/api/dsh-board/state'))).json();
+  assert.equal(titleSnapshot.fileName,'安装包命名测试.draft','hosted filename metadata follows the title');
+  await page.evaluate(()=>{window.showSaveFilePicker=async options=>{window.__titleSuggestion=options.suggestedName;throw new DOMException('cancelled','AbortError');};});
+  await page.getByRole('button',{name:'保存',exact:true}).click();await page.waitForFunction(()=>window.__titleSuggestion==='安装包命名测试.draft');
+  await page.evaluate(async()=>{
+    const root=await navigator.storage.getDirectory(),folder='package-binding-'+crypto.randomUUID();
+    const directory=await root.getDirectoryHandle(folder,{create:true});
+    sessionStorage.setItem('package-binding-folder',folder);sessionStorage.setItem('package-binding-pickers','0');
+    window.showSaveFilePicker=async()=>directory.getFileHandle('安装包命名测试.draft',{create:true});
+    window.showDirectoryPicker=async()=>{sessionStorage.setItem('package-binding-pickers',String(+sessionStorage.getItem('package-binding-pickers')+1));return directory;};
+  });
+  await page.getByRole('button',{name:'保存',exact:true}).click();await page.waitForFunction(()=>window.__state.fileHandle?.name==='安装包命名测试.draft' && window.__state.saveState==='saved');
+  await boardName.fill('包内持久绑定');await boardName.press('Enter');await page.getByRole('button',{name:'保存',exact:true}).click();
+  await page.waitForFunction(()=>window.__state.fileHandle?.name==='包内持久绑定.draft' && window.__state.saveState==='saved');
+  for(let i=0;(await tools.get('draft_board_read').execute()).board.name!=='包内持久绑定';i++){if(i>100)throw new Error('Packaged name did not sync');await new Promise(r=>setTimeout(r,50));}
+  await page.addInitScript(()=>{window.showSaveFilePicker=async()=>{throw new Error('Unexpected repeated file picker');};window.showDirectoryPicker=async()=>{throw new Error('Unexpected repeated directory picker');};});
+  await page.reload({waitUntil:'domcontentloaded'});await page.getByRole('textbox',{name:'白板名称',exact:true}).waitFor();
+  await page.getByRole('textbox',{name:'白板名称',exact:true}).fill('包内刷新后改名');await page.getByRole('textbox',{name:'白板名称',exact:true}).press('Enter');
+  await page.getByRole('button',{name:'保存',exact:true}).click();
+  await page.waitForFunction(()=>window.__state.fileHandle?.name==='包内刷新后改名.draft' && window.__state.saveState==='saved');
+  assert.equal(await page.evaluate(()=>+sessionStorage.getItem('package-binding-pickers')),1,'packaged refresh reuses the saved folder');
+  await page.evaluate(()=>{delete window.showSaveFilePicker;});
+  const [bindingDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'另存为',exact:true}).click()]);
+  assert.equal(bindingDownload.suggestedFilename(),'包内刷新后改名.draft');
+  await page.waitForFunction(()=>window.__state.fileHandle===null && window.__state.saveState==='saved');
+  await page.evaluate(async()=>{const folder=sessionStorage.getItem('package-binding-folder');if(!/^package-binding-[\da-f-]+$/.test(folder))throw new Error('Unsafe cleanup');await(await navigator.storage.getDirectory()).removeEntry(folder,{recursive:true});});
+  for(let i=0;(await tools.get('draft_board_read').execute()).board.name!=='包内刷新后改名';i++){if(i>100)throw new Error('Packaged restored name did not sync');await new Promise(r=>setTimeout(r,50));}
   const initial = await tools.get('draft_board_read').execute();
   const node = { id: 'n_package001', type: 'text', markdown: '独立安装包验证', x: 180, y: 200, w: 240 };
-  const changed = await tools.get('draft_board_apply').execute({ batch: JSON.stringify({ batchVersion: '1.0', boardId: initial.board.id, baseContentVersion: initial.board.contentVersion, actor: 'agent', label: '安装包浏览器验证', ops: [{ op: 'addNode', node, before: null, after: node }] }) }, { signal: new AbortController().signal });
+  const changed = await tools.get('draft_board_apply').execute({ batch: JSON.stringify({ batchVersion: '1.0', boardId: initial.board.id, baseContentVersion: initial.board.contentVersion, actor: 'agent', label: '安装包浏览器验证', ops: [{ op: 'addNode', node, before: null, after: node }] }) }, { agent:editorAgent,signal: new AbortController().signal });
   assert.equal(changed.ok, true);
   await page.locator(`[data-node-id="${node.id}"]`).waitFor();
   await page.waitForFunction(()=>window.__state.saveState==='saved');
@@ -94,7 +144,7 @@ try {
   const qualitySnapshot=await (await routes.get('/api/dsh-board/state').fetch(new Request(origin+'/api/dsh-board/state'))).json();
   const qualityPointer=JSON.parse(await readFile(join(directory,'data/current.json'),'utf8'));
   const qualityDiskPath=join(directory,'data/boards',qualityPointer.file),qualityDiskBytes=await readFile(qualityDiskPath);
-  const submitQuality=ops=>tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:qualityBefore.board.id,baseContentVersion:qualityBefore.board.contentVersion,actor:'agent',label:'普通编辑布局预检',ops})},{signal:new AbortController().signal});
+  const submitQuality=ops=>tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:qualityBefore.board.id,baseContentVersion:qualityBefore.board.contentVersion,actor:'agent',label:'普通编辑布局预检',ops})},{agent:editorAgent,signal:new AbortController().signal});
   const addQuality=n=>({op:'addNode',node:n,before:null,after:n});
   const overlapping={id:'n_quality001',type:'text',markdown:'重叠候选',x:node.x+20,y:node.y,w:100};
   const refusedPromise=submitQuality([addQuality(overlapping)]);
@@ -137,7 +187,7 @@ try {
     {op:'setNodeShape',nodeId:node.id,before:null,after:{shape:'diamond'}},
     {op:'addNode',node:finish,before:null,after:finish},
     {op:'addEdge',edge:flowEdge,before:null,after:flowEdge},
-  ]})},{signal:new AbortController().signal})).ok,true);
+  ]})},{agent:editorAgent,signal:new AbortController().signal})).ok,true);
   await page.locator(`[data-node-id="${node.id}"][data-node-shape="diamond"]`).waitFor();
   await page.locator(`[data-node-id="${finish.id}"][data-node-shape="pill"]`).waitFor();
   await page.waitForFunction(()=>window.__state.saveState==='saved');
@@ -176,7 +226,7 @@ try {
   await page.reload({waitUntil:'domcontentloaded'});await page.locator('.toolbar').waitFor();
   // A fresh external content batch remains independently undoable after the layout round.
   const current=await tools.get('draft_board_read').execute();
-  assert.equal((await tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:current.board.id,baseContentVersion:current.board.contentVersion,actor:'agent',label:'内容更新独立于布局',ops:[{op:'updateNodeCaption',nodeId:node.id,before:null,after:{caption:'合成回归内容'}}]})},{signal:new AbortController().signal})).ok,true);
+  assert.equal((await tools.get('draft_board_apply').execute({batch:JSON.stringify({batchVersion:'1.0',boardId:current.board.id,baseContentVersion:current.board.contentVersion,actor:'agent',label:'内容更新独立于布局',ops:[{op:'updateNodeCaption',nodeId:node.id,before:null,after:{caption:'合成回归内容'}}]})},{agent:editorAgent,signal:new AbortController().signal})).ok,true);
   await page.waitForFunction(()=>window.__state.file.nodes[0]?.caption==='合成回归内容');
   await page.getByRole('button', { name: '撤销最新一轮', exact: true }).click();
   await page.waitForFunction(() => !window.__state.file.nodes[0]?.caption && window.__state.saveState === 'saved');
@@ -270,6 +320,97 @@ try {
   await page.locator('.dsh-layout-float[data-state=pending]').waitFor();
   await page.getByRole('button',{name:'取消',exact:true}).click();
   await page.locator('.dsh-layout-float[data-state=cancelled]').waitFor();
+  // Exercise the actual packaged composer control and admission wrapper.
+  const permissionSelect=page.getByRole('button',{name:/^白板编辑权限，当前：/});
+  const permissionMenu=page.getByRole('menu',{name:'白板编辑权限',exact:true});
+  const permissionLabels={auto:'默认放权',chat_once:'本轮只聊',chat_continuous:'多轮只聊'};
+  await permissionSelect.waitFor();
+  const compactBounds=await permissionSelect.boundingBox();
+  assert.ok(compactBounds.width<=60 && compactBounds.height===24,'compact desktop trigger has a small predictable footprint');
+  const selectPermission=async mode=>{
+    await permissionSelect.click();
+    await permissionMenu.getByRole('menuitemradio',{name:permissionLabels[mode],exact:true}).click();
+    await page.waitForFunction(mode=>{const control=document.querySelector('.dsh-board-permission-trigger');return control?.dataset.mode===mode&&control.getAttribute('aria-busy')!=='true';},mode);
+    assert.equal(await permissionMenu.count(),0,'choosing a mode closes the menu');
+  };
+  await permissionSelect.press('ArrowDown');
+  const autoOption=permissionMenu.getByRole('menuitemradio',{name:'默认放权',exact:true});
+  assert.equal(await autoOption.getAttribute('aria-checked'),'true');
+  assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'默认放权');
+  await autoOption.press('ArrowDown');
+  assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'本轮只聊');
+  await permissionMenu.getByRole('menuitemradio',{name:'本轮只聊',exact:true}).press('Escape');
+  assert.equal(await permissionMenu.count(),0);assert.equal(await permissionSelect.evaluate(el=>el===document.activeElement),true,'Escape restores trigger focus');
+  await permissionSelect.click();await page.getByRole('textbox',{name:'对话输入'}).click();
+  assert.equal(await permissionMenu.count(),0,'clicking outside dismisses without choosing');
+  await permissionSelect.click();await page.frameLocator('iframe.dsh-board-frame').locator('.app-version').click();
+  await permissionMenu.waitFor({state:'hidden'});
+  assert.equal(await permissionMenu.count(),0,'clicking inside the board iframe also dismisses the host menu');
+  await selectPermission('chat_once');
+  await page.evaluate(()=>{window.__rejectAdmissionOnce=true;});
+  assert.equal((await page.evaluate(()=>window.__sendPanel('只讨论，不修改。'))).kind,'error');
+  assert.equal(await permissionSelect.getAttribute('data-mode'),'chat_once','refusal does not consume the one-shot choice');
+  assert.equal((await page.evaluate(()=>window.__sendPanel('只讨论，不修改。'))).kind,'success');
+  await page.waitForFunction(()=>document.querySelector('.dsh-board-permission-trigger')?.dataset.mode==='auto');
+  const readonlyAdmission=await page.evaluate(()=>window.__panelAdmission);
+  assert.equal(readonlyAdmission.content[0].text,'只讨论，不修改。');
+  events.get('agent/inbox/claimed')({agent:panelAgent,message:{source:{kind:'user',rpcId:readonlyAdmission.requestId}},turn:101});
+  const permissionBefore=await tools.get('draft_board_read').execute(),permissionBytes=await readFile(qualityDiskPath);
+  const permissionBatch=()=>({batch:JSON.stringify({batchVersion:'1.0',boardId:permissionBefore.board.id,baseContentVersion:permissionBefore.board.contentVersion,actor:'agent',label:'只聊权限回归',ops:[{op:'updateNodeCaption',nodeId:node.id,before:null,after:{caption:'通过授权后才写入。'}}]})});
+  assert.equal((await tools.get('draft_board_apply').execute(permissionBatch(),panelExec)).error.code,'E_BOARD_READ_ONLY');
+  assert.deepEqual(await readFile(qualityDiskPath),permissionBytes);
+  await selectPermission('chat_continuous');
+  for(const turn of [102,103]){
+    assert.equal((await page.evaluate(()=>window.__sendPanel('继续讨论。'))).kind,'success');
+    const admission=await page.evaluate(()=>window.__panelAdmission);
+    events.get('agent/inbox/claimed')({agent:panelAgent,message:{source:{kind:'user',rpcId:admission.requestId}},turn});
+    assert.equal((await tools.get('draft_board_apply').execute(permissionBatch(),panelExec)).error.code,'E_BOARD_READ_ONLY');
+    assert.equal(await permissionSelect.getAttribute('data-mode'),'chat_continuous');
+  }
+  await permissionSelect.click();
+  await page.evaluate(()=>window.__switchPanelSession('another-panel-chat'));
+  await page.waitForFunction(()=>document.querySelector('.dsh-board-permission-trigger')?.dataset.mode==='auto');
+  assert.equal(await permissionMenu.count(),0,'switching chat closes the previous chat menu');
+  await page.evaluate(()=>window.__switchPanelSession('panel-session'));
+  await page.waitForFunction(()=>document.querySelector('.dsh-board-permission-trigger')?.dataset.mode==='chat_continuous');
+  await page.reload({waitUntil:'domcontentloaded'});await page.frameLocator('iframe.dsh-board-frame').locator('.toolbar').waitFor();
+  await page.waitForFunction(()=>document.querySelector('.dsh-board-permission-trigger')?.dataset.mode==='chat_continuous');
+  await page.frameLocator('iframe.dsh-board-frame').getByRole('button',{name:'AI 布局整理',exact:true}).click();
+  await page.getByText('当前聊天处于只聊状态，请先切换为默认放权，再整理布局。',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'收起布局提示',exact:true}).click();
+  await permissionSelect.click();
+  await permissionMenu.screenshot({path:join(artifacts,'package-permission-menu.png')});
+  assert.equal(await permissionMenu.evaluate(el=>el.parentElement===document.body),true,'menu escapes native composer clipping through a portal');
+  await permissionMenu.getByRole('menuitemradio',{name:'多轮只聊',exact:true}).press('Escape');
+  await page.evaluate(()=>{document.body.style.zoom='.8';});
+  assert.equal(await permissionSelect.isVisible(),true);await selectPermission('chat_once');
+  await permissionSelect.click();
+  const zoomMenu=await permissionMenu.boundingBox();
+  assert.ok(zoomMenu.x>=0 && zoomMenu.y>=0 && zoomMenu.x+zoomMenu.width<=1440 && zoomMenu.y+zoomMenu.height<=900,'zoomed menu stays in the viewport');
+  const zoomAnchor=await permissionSelect.boundingBox();
+  assert.ok(Math.abs(zoomMenu.x+zoomMenu.width-(zoomAnchor.x+zoomAnchor.width))<2,'portal aligns to trigger under CSS zoom');
+  await permissionMenu.screenshot({path:join(artifacts,'package-permission-menu-zoom.png')});
+  await permissionMenu.getByRole('menuitemradio',{name:'本轮只聊',exact:true}).press('Escape');
+  await page.evaluate(()=>{document.body.style.zoom='';});
+  await page.emulateMedia({colorScheme:'dark'});
+  const darkPreview=await page.addStyleTag({content:':root{color-scheme:dark}'});
+  await permissionSelect.click();await permissionMenu.screenshot({path:join(artifacts,'package-permission-menu-dark.png')});
+  await permissionMenu.getByRole('menuitemradio',{name:'本轮只聊',exact:true}).press('Escape');
+  await darkPreview.evaluate(el=>el.remove());await page.emulateMedia({colorScheme:'light'});
+  await page.setViewportSize({width:740,height:580});await permissionSelect.click();
+  const narrowMenu=await permissionMenu.boundingBox();
+  assert.ok(narrowMenu.x>=0 && narrowMenu.y>=0 && narrowMenu.x+narrowMenu.width<=740 && narrowMenu.y+narrowMenu.height<=580,'narrow composer menu stays visible');
+  await permissionMenu.getByRole('menuitemradio',{name:'本轮只聊',exact:true}).press('Escape');
+  await page.setViewportSize({width:1440,height:900});
+  await selectPermission('auto');
+  assert.equal((await page.evaluate(()=>window.__sendPanel('请补充白板。'))).kind,'success');
+  const writableAdmission=await page.evaluate(()=>window.__panelAdmission);
+  events.get('agent/inbox/claimed')({agent:panelAgent,message:{source:{kind:'user',rpcId:writableAdmission.requestId}},turn:104});
+  assert.equal((await tools.get('draft_board_apply').execute(permissionBatch(),panelExec)).ok,true);
+  await page.frameLocator('iframe.dsh-board-frame').locator(`[data-node-id="${node.id}"] .node-caption`).waitFor();
+  await page.frameLocator('iframe.dsh-board-frame').getByRole('button',{name:'撤销最新一轮',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('iframe').contentWindow.__state.saveState==='saved');
+  console.log('PERMISSIONS PASS: packaged three-state composer; refusal/acceptance and once reset; exact-message read-only enforcement; continuous mode, session isolation, reload, layout refusal, zoom, authorized edit and undo.');
   assert.deepEqual(errors,[]);
   const checksum = createHash('sha256').update(await readFile(archive)).digest('hex');
   await writeFile(join(artifacts, metadata.filename + '.sha256'), `${checksum}  ${metadata.filename}\n`);
